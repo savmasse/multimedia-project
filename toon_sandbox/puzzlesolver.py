@@ -5,7 +5,7 @@
 import cv2
 import glob
 import numpy as np
-import Tkinter as tk
+import tkinter as tk
 import random
 import os.path
 import itertools
