@@ -7,6 +7,9 @@ class Matcher (object):
         pass;
         
     def match(self):
+        """
+        Abstract class to be overridden in child class of Matcher.
+        """
         pass;
         
     def hasNeighbours(self, pieces,row, col):
@@ -16,7 +19,7 @@ class Matcher (object):
         # create list of neighbours: set them all to not exist
         neighbours = np.zeros((4));
         r = len(pieces);
-        c = len(pieces);
+        c = len(pieces[0]);
         
         # now add the ones that do exist
         if (col>0):
