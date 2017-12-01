@@ -7,6 +7,7 @@ import timeit;
 import math;
 import itertools;
 from PuzzleSolver import PuzzleSolver as ps;
+from edgeMatcher import EdgeMatcher;
 
 
 
@@ -157,13 +158,10 @@ def unFlatten(flattened, dim):
     return im;
 
 
-def match ():
+def match (image, dim):
     """ 
     Attempt at matching larger puzzles.
     """
-    
-    image = cv2.imread("../Tiles_shuffled/tiles_shuffled_5x5_07.png");
-    dim = [5,5];    
     matrix = divideImage(image, dim);
     hc = HistogramComparison(3, 0.8, cv2.HISTCMP_CORREL);
     
@@ -216,15 +214,24 @@ def match ():
                     temp = 0;
 
                     if (k > 0 and i == 0):
+                        # Piece is first of a new row, can only match with the above piece
                         temp = hc.matchNeighbour(matched[(k-1)*dim[1]], f[not_yet_matched[j]], ps.DIR_DOWN);
 #                            im = np.vstack((matched[(k-1)*dim[1]], f[not_yet_matched[j]]))
 #                            plt.imshow(im);
 #                            plt.show();
 #                            print (temp)
                         #print (k, i, "Matched down", not_yet_matched[j])
-                    elif (i > 0):
-                        temp = hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
-                    elif (i < 1 and k == 0):
+#                    elif (i > 0):
+#                        temp = hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
+#                    elif (i < 1 and k == 0):
+#                        temp = hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
+                    elif (k > 0):
+                        # Match to the piece to the left and the piece above
+                        temp = hc.matchNeighbour(matched[(k-1)*dim[1] + i], f[not_yet_matched[j]], ps.DIR_DOWN);
+                        temp = temp + hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
+                        temp = temp/2;
+                    else:
+                        # Only match new piece with left neighbour: this piece is on the first row
                         temp = hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
                         
                     if (temp > best_val):
@@ -251,10 +258,233 @@ def match ():
     
     # Show the final result in unflattened form
     u = unFlatten(result, dim);
-    #showComplete(u, image, "Result");
-                
-print(timeit.timeit(match, number = 10));
+    showComplete(u, image, "Result");
+         
 
-        
+#image = cv2.imread("../Tiles_shuffled/tiles_shuffled_2x2_00.png");
+#dim = [2,2];
+#match(image, dim);
 
+#for i in range (9):
+#    image = cv2.imread("../Tiles_shuffled/tiles_shuffled_2x2_0" + str(i) + ".png");
+#    dim = [2,2]; 
+#              
+#    match(image, dim);
+
+
+def matchRotated (image, dim):
+    """ 
+    Attempt at matching larger puzzles.
+    """
+    matrix = divideImage(image, dim);
+    hc = HistogramComparison(3, 0.8, cv2.HISTCMP_CORREL);
     
+    # Get initial flattened array
+    flattened = flatten(matrix);
+    
+    # Set variables to keep score for the best current match
+    result_value = 0;
+    result = np.copy(flattened);
+
+    # Go through all possible first pieces
+    for index in range (len(flattened)):        
+        f = np.copy(flattened);
+        
+        first_piece = f[index];
+        for rot in range (4):
+            
+            # Rotate the first piece
+            if (rot != 0):
+                first_piece = np.rot90(first_piece);
+        
+            # Keep record of matched pieces and pieces that have not yet been matched
+            matched = [first_piece];
+            not_yet_matched = list(range(0,dim[0]*dim[1]));
+            not_yet_matched.remove(index);
+            match_value = 0;
+    
+            # Now go over the elements of each row
+            for k in range (0, dim[0]):
+                # Get best match for each piece of the row
+                for i in range (0,dim[1]):
+                    # Keep record of best matches for comparison later
+                    best_val = 0;
+                    best_match = 0;
+                    if (len (not_yet_matched) > 0):
+                        best_match = not_yet_matched[0];
+                    
+                    # Skip the first tile
+                    if (k == 0 and i == 0):
+                        continue;
+                    
+                    # Check to make sure we stop at last element
+                    #if ((k*dim[0] + i) < (len(f)-1)):
+                    for j in range (len(not_yet_matched)):
+                        
+                        piece = f[not_yet_matched[j]];
+                        for r in range (4):
+                            # Rotate the piece
+                            if (r != 0):
+                                piece = np.rot90(piece);
+                            
+                            temp = 0;
+                            if (k > 0 and i == 0):
+                                # Piece is first of a new row, can only match with the above piece
+                                temp = hc.matchNeighbour(matched[(k-1)*dim[1]], piece, ps.DIR_DOWN);
+        #                            im = np.vstack((matched[(k-1)*dim[1]], f[not_yet_matched[j]]))
+        #                            plt.imshow(im);
+        #                            plt.show();
+        #                            print (temp)
+                                #print (k, i, "Matched down", not_yet_matched[j])
+        #                    elif (i > 0):
+        #                        temp = hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
+        #                    elif (i < 1 and k == 0):
+        #                        temp = hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
+                            elif (k > 0):
+                                # Match to the piece to the left and the piece above
+                                temp = hc.matchNeighbour(matched[(k-1)*dim[1] + i], piece, ps.DIR_DOWN);
+                                temp = temp + hc.matchNeighbour(matched[-1], piece, ps.DIR_RIGHT);
+                                temp = temp/2;
+                            else:
+                                # Only match new piece with left neighbour: this piece is on the first row
+                                temp = hc.matchNeighbour(matched[-1], piece, ps.DIR_RIGHT);
+                            
+                            if (temp > best_val):
+                                best_val = temp;
+                                #print (k,i, ": replaced " + str(best_match) + " with " + str(not_yet_matched[j]));
+                                best_piece = piece;
+                                best_match = not_yet_matched[j];
+                    
+                    # While there's pieces to add, add them...
+                    if (len(not_yet_matched) > 0):
+                        matched.append(best_piece);
+                        not_yet_matched.remove(best_match);
+                        match_value = match_value + best_val;
+                    
+        # Show the match that was made and add the value to the list
+        #showFlattened(f)
+        #showFlattened(matched);
+        #print (match_value)
+        if (match_value > result_value):
+            result_value = match_value;
+            result = matched;
+        
+    # Show the final result in flattened form
+    #showFlattened(result);
+    
+    # Show the final result in unflattened form
+    u = unFlatten(result, dim);
+    showComplete(u, image, "Result");
+
+
+#for i in range (9):
+#    try:
+#        image = cv2.imread("../Tiles_rotated/tiles_rotated_5x5_0" + str(i) + ".png");
+#        matchRotated(image, [5,5]);
+#    except:
+#        pass;
+
+def matchEdges (image, dim):
+    """ 
+    Attempt at matching larger puzzles.
+    """
+    matrix = divideImage(image, dim);
+    hc = EdgeMatcher(3);
+    
+    # Get initial flattened array
+    flattened = flatten(matrix);
+    
+    # Set variables to keep score for the best current match
+    result_value = 999999;
+    result = np.copy(flattened);
+
+    # Go through all possible first pieces
+    for index in range (len(flattened)):        
+        f = np.copy(flattened);
+        
+#        indices = list(p[index]);
+#        # Get the rest of the range to add to the list
+#        r = list(range (dim[0]*dim[1]));
+#        x = indices[0];
+#        y = indices[1];
+#        r.remove(x);
+#        r.remove(y);
+#        # Append to list
+#        indices.extend(r);
+#        f = f[indices];
+#        showFlattened(f);  
+        
+        # Keep record of matched pieces and pieces that have not yet been matched
+        matched = [f[index]];
+        not_yet_matched = list(range(0,dim[0]*dim[1]));
+        not_yet_matched.remove(index);
+        match_value = 0;
+
+        # Now go over the elements of each row
+        for k in range (0, dim[0]):
+            # Get best match for each piece of the row
+            for i in range (0,dim[1]):
+                # Keep record of best matches for comparison later
+                best_val = 999999;
+                best_match = 0;
+                if (len (not_yet_matched) > 0):
+                    best_match = not_yet_matched[0];
+                
+                # Skip the first tile
+                if (k == 0 and i == 0):
+                    continue;
+                
+                # Check to make sure we stop at last element
+                #if ((k*dim[0] + i) < (len(f)-1)):
+                for j in range (len(not_yet_matched)):
+                    temp = 0;
+
+                    if (k > 0 and i == 0):
+                        # Piece is first of a new row, can only match with the above piece
+                        temp = hc.matchNeighbour(matched[(k-1)*dim[1]], f[not_yet_matched[j]], ps.DIR_DOWN);
+#                            im = np.vstack((matched[(k-1)*dim[1]], f[not_yet_matched[j]]))
+#                            plt.imshow(im);
+#                            plt.show();
+#                            print (temp)
+                        #print (k, i, "Matched down", not_yet_matched[j])
+#                    elif (i > 0):
+#                        temp = hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
+#                    elif (i < 1 and k == 0):
+#                        temp = hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
+                    elif (k > 0):
+                        # Match to the piece to the left and the piece above
+                        temp = hc.matchNeighbour(matched[(k-1)*dim[1] + i], f[not_yet_matched[j]], ps.DIR_DOWN);
+                        temp = temp + hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
+                        temp = temp/2;
+                    else:
+                        # Only match new piece with left neighbour: this piece is on the first row
+                        temp = hc.matchNeighbour(matched[-1], f[not_yet_matched[j]], ps.DIR_RIGHT);
+                    
+                    if (temp < best_val):
+                        best_val = temp;
+                        #print (k,i, ": replaced " + str(best_match) + " with " + str(not_yet_matched[j]));
+                        best_match = not_yet_matched[j];
+                        
+                # While there's pieces to add, add them...
+                if (len(not_yet_matched) > 0):
+                    matched.append(f[best_match]);
+                    not_yet_matched.remove(best_match);
+                    match_value = match_value + best_val;
+                    
+        # Show the match that was made and add the value to the list
+        if (match_value < result_value):
+            result_value = match_value;
+            result = matched;
+            
+    # Show the final result in flattened form
+    #showFlattened(result);
+    
+    # Show the final result in unflattened form
+    u = unFlatten(result, dim);
+    showComplete(u, image, "Result");
+        
+image = cv2.imread("../Tiles_shuffled/tiles_shuffled_2x2_00.png");
+dim = [2,2]
+matrix = divideImage(image, dim);
+showComplete(matrix, image);
+matchEdges(image, dim);
