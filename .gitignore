@@ -1,3 +1,5 @@
+img/
+
 *~
 
 # temporary files which can be created if a process still has a handle open of a deleted file
@@ -140,4 +142,3 @@ venv.bak/
 
 # mypy
 .mypy_cache/
-© 2017 GitHub, In
