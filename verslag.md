@@ -1,0 +1,3 @@
+- histogram van comparison[a,i] (binsize 4*n?)
+- > ook: gemiddelde histogram voor scrambled vs shuffled; tiled vs jigsaw
+- masked edge

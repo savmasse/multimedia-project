@@ -2,3 +2,6 @@
 
 class Unsolvable(Exception):
   pass
+
+class Guess(Exception):
+  pass

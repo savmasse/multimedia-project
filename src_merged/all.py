@@ -2,21 +2,22 @@
 
 import glob
 import time
-import puzzlesolver as ps
+from puzzlesolver import Puzzle, Unsolvable
 import numpy as np
 
 def execute ():
   # Kies welke puzzels je wil laden
   paths = []
-  #paths.extend(glob.glob('../img/**/tile*rotated*.png', recursive=True))
+  #paths.extend(glob.glob('../img/**/*tile*.png', recursive=True))
   #paths.extend(glob.glob('../img/**/tile*shuffled*.png', recursive=True))
-  #paths.extend(glob.glob('../img/**/*jigsaw*scrambled*.png', recursive=True))
+  #paths.extend(glob.glob('../img/**/*jigsaw*scrambled*2x2*.png', recursive=True))
+  #paths.extend(glob.glob('../img/**/*jigsaw*5x5*.png', recursive=True))
   paths.extend(glob.glob('../img/**/*.png', recursive=True))
 
   times = []
   t0 = time.time()
   for path in sorted(paths):
-    puzzle = ps.Puzzle(path)
+    puzzle = Puzzle(path)
     try:
       ta = time.time()
       puzzle.extract_pieces()
@@ -24,8 +25,12 @@ def execute ():
       times.append(dt)
 
       print(puzzle.correct(path), '%.02f' % np.round(1000*(dt), 2), path)
+
+      for piece in puzzle.pieces:
+        #piece.show_info()
+        pass
       puzzle.solve()
-    except ps.Unsolvable as exc:
+    except Unsolvable as exc:
       print(puzzle.correct(path), 'ERR ', path)
       print(exc)
       continue
@@ -37,6 +42,9 @@ def execute ():
   #plt.hist(times, int(np.ceil(max(times)/.00025)), (0,max(times)))
 
   print('Uitvoeringstijd: %i ms' % int((t1-t0)*1000))
+
+  import cv2
+  cv2.destroyAllWindows()
 
 
 graph = False

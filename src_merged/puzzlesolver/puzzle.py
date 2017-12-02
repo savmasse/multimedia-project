@@ -5,8 +5,6 @@
 from .exception import Unsolvable
 from .piece import Piece
 
-import time
-
 import cv2
 import numpy as np
 from scipy.signal import argrelmax as arm
@@ -42,7 +40,7 @@ class Puzzle:
 
     n_pieces = len(self.contours)
 
-    # Geen ruimte tussen stukken: automatisch knippen bij scherpe overgangen
+    # Geen ruimte tussen stukken: automatisch knippen met aangepaste methode
     if n_pieces is 1:
       self.tile = True
       self.scrambled = False
@@ -56,17 +54,40 @@ class Puzzle:
         self.shape = (n_square, n_square)
       else:
         self.shape = (2,3)
+        # enkel mogelijk door voorkennis van de set
+        # > ALTERNATIEF: - grootste gemene delers die meest naar vierkant neigen?
+        #                - puzzel gewoon laten genereren?
 
       # Tegel of jigsaw herkennen
+      # Parameter<2> approxPolyDP: % marge t.o.v. contour lengte om uitstekers te herkennen
       #   3-  = tegels worden fout herkend (meer dan 4 hoeken)
       #   4,5 = tegels = altijd 4 hoeken; jigsaw in 1 pic 4 hoeken
       #   5   = fouten in extract_jigsaws
-      #   6+  = jigsaw heeft af en toe 4 hoeken
+      #   6+  = jigsaw heeft af en toe meer dan 4 hoeken
       polygons = [cv2.approxPolyDP(contour, 4, True) for contour in self.contours]
       if not (self.extract_tiles(polygons) or self.extract_jigsaws(polygons)):
         raise Unsolvable('Failed to extract pieces')
       else:
         self.check_scrambled()
+
+    # Lengtes bepalen
+    vecs = np.diff(np.pad([piece.corners for piece in self.pieces], ((0,0),(0,1),(0,0),(0,0)), 'wrap'), axis=1).squeeze()
+    lens = np.hypot(vecs[:,:,0], vecs[:,:,1])
+
+    srtd = np.sort(lens.ravel())
+    half = int(len(srtd)/2)
+
+    if abs(srtd[:half][-1]-srtd[half:][0]) < 10:
+      sides = [0]*4 # 0 = same len
+      for piece in self.pieces:
+        piece.sides = sides
+    else:
+      short = int(np.rint(np.median(srtd[half:], overwrite_input=True)))
+      for a in range(len(self.pieces)):
+        if abs(lens[a,0]-short) < 10:
+          self.pieces[a].sides = [2,1,2,1] # 1 = short
+        else:
+          self.pieces[a].sides = [1,2,1,2] # 2 = long
 
   def extract_tiles ( self, polygons ):
     """ Haal tegels uit de contouren """
@@ -102,26 +123,25 @@ class Puzzle:
       unit_vectors = vectors/norms.reshape(-1,1) # unit vectors
       scal_prods = np.abs(np.sum(unit_vectors[:-1]*unit_vectors[1:], axis=1))
 
-      # L1 = OVERFIT (.04 ideaal, 0395 1 err, 0378 0 err)
-      # L2 = OVERFIT (.04 ideaal)
+      # L1,L2 = OVERFIT (.04 ideaal, 0395 1 err, 0378 0 err)
       # SP = SAFE    (max uitchieter = .1308, meest <.1)
+      # Vier scherpste hoeken bijhouden (via sortering)
       possibles = sorted(((i,sp)
         for i, (l1,l2,sp,pt) in enumerate(zip(rel_lens[:-1], rel_lens[1:], scal_prods, polygon))
         if l1>.0378 and l2>.0378 and sp < .2
       ), key=lambda x:x[1])
 
-      # SELFTEST (mag weg op einde v project)
+      # SELFTEST
       if len(possibles) < 4:
         return False # gebeurt niet tenzij wijzigingen aan parameters
 
-      # Vier scherpste hoeken bijhouden (via sortering)
-      indices = sorted([i for i,sp in possibles[:4]])
+      # HINT: kan ook via np.argsort()
 
       # Hersorteren volgens tegenwijzerszin
-      corners = np.array([polygon[i] for i in indices])
+      idx = sorted([i for i,sp in possibles[:4]])
 
       # Bijhouden om op te slaan als hoekpunten in de klasse
-      rectangles.append(corners)
+      rectangles.append(np.array(polygon[idx]))
 
     # Puzzeltype opslaan
     self.corners = rectangles
@@ -129,7 +149,7 @@ class Puzzle:
 
     # Puzzelstukken genereren
     self.pieces = [
-      Piece().from_contour(self.input, self.gray, contour, corners)
+      Piece().from_contour(self.input, self.gray, contour, corners, jigsaw=True)
       for contour, corners in zip(self.contours, self.corners)
     ]
 
@@ -199,7 +219,7 @@ class Puzzle:
     ]
 
   def check_scrambled ( self ):
-    """ Controleer of de puzzelstukken rechtop staan (of rotaties n*90°) """
+    """ Controleer of de puzzelstukken rechtop staan [incl. rotaties n*90°] """
 
     self.scrambled = False
 
@@ -209,43 +229,89 @@ class Puzzle:
         self.scrambled = True
         break
 
-  def solve ( self, radius=5 ):
-    t0 = time.time()
+  def compatibility_matrix ( self ):
+    # Genereer volledig toegelaten output matrix
+    n_pieces = len(self.pieces)
+    matrix = np.ones((n_pieces,4, n_pieces,4), dtype=bool)
 
-    # TODO: ondersteun HSV
-    pieces_edge_hists = [
-      [
-        cv2.normalize(cv2.calcHist([piece.input], range(3), piece.edge_neighbours_mask(side, radius), 3*[8], 3*[0,256]), None)
-        for side in range(len(piece.corners))
+    # Diagonaal niet toelaten
+    #  = een puzzelstuk kan zijn eigen randen niet met elkaar matchen
+    for ab in range(n_pieces):
+      matrix[ab,:,ab,:] = False
+
+    return matrix
+
+  def histogram_correlation_matrix ( self, radius=5, hsv=False, channels=range(3), where=False ):
+    """ Genereer een matrix die de correlatie tussen histogrammen van elk paar randen berekent """
+
+    # Histogrammen berekenen
+    # hists[piece,edge] = histogram
+    if not hsv:
+      hists = [
+        [
+          cv2.normalize(cv2.calcHist([piece.input], range(3), piece.edge_neighbours_mask(side, radius), 3*[8], 3*[0,256]), None)
+          for side in range(len(piece.corners))
+        ]
+        for piece in self.pieces
       ]
-      for piece in self.pieces
-    ]
+    else:
+      hists = [
+        [
+          cv2.normalize(cv2.calcHist([cv2.cvtColor(piece.input, cv2.BGR2HSV)], range(2), piece.edge_neighbours_mask(side, radius), 2*[8], [0,180, 0,256]), None)
+          for side in range(len(piece.corners))
+        ]
+        for piece in self.pieces
+      ]
 
-    n = len(self.pieces)
-    comparison = np.empty((n,4,n,4))
-    comparison.fill(np.nan)
-    for a, a_edges in enumerate(pieces_edge_hists):
-      for b, b_edges in enumerate(pieces_edge_hists):
-        if a is not b:
-          for i, a_edge_hist in enumerate(a_edges):
-            for j, b_edge_hist in enumerate(b_edges):
-              comparison[a,i,b,j] = comparison[a,i,b,j] = \
-                cv2.compareHist(a_edge_hist, b_edge_hist, cv2.HISTCMP_CORREL)
+    # Genereer met NaN gevulde output matrix
+    n_pieces = len(self.pieces)
+    matrix = np.empty((n_pieces,4, n_pieces,4))
+    matrix.fill(np.nan) # controleer of enkel de diagonaal achteraf NaN blijft
 
-    a,i = 0,0
-    candidates = comparison[a,i]
-    i_min = np.nanargmin(candidates)
+    # Vul matrix met correlatie van histogrammen
+    # TODO: support voor andere cv2.HISTCMP_ algoritmen [! output betekenis wijzigt !]
+    if where: # TODO: dit is trager, terwijl het sneller zou moeten zijn (cache misses/where generatie/steeds herindexeren?)
+      for a,i,b,j in zip(*where):
+        matrix[a,i,b,j] = matrix[a,i,b,j] = \
+          cv2.compareHist(hists[a][i], hists[b][j], cv2.HISTCMP_CORREL)
+    else:
+      for a, a_edges in enumerate(hists):
+        for b, b_edges in enumerate(hists):
+          if a is not b:
+            for i, a_edge_hist in enumerate(a_edges):
+              for j, b_edge_hist in enumerate(b_edges):
+                matrix[a,i,b,j] = matrix[a,i,b,j] = \
+                  cv2.compareHist(a_edge_hist, b_edge_hist, cv2.HISTCMP_CORREL)
+    return matrix
 
+  def solve ( self ):
+    M_compatible = self.compatibility_matrix()
+    M_histograms = self.histogram_correlation_matrix(where=np.where(M_compatible)) # TODO: gebruik M_compatible masker
 
+    n_pieces = len(self.pieces)
+    n_top = 10
 
-    print('%i/%i' % (i_min,candidates.size))
+    for a in range(n_pieces):
+      for i in range(4):
+        cmp = M_histograms[a,i]
+        asrt = np.argsort(cmp, None)[:-4] # 4x NaN
+        i_top = np.unravel_index(asrt[-n_top:], cmp.shape)
 
-
-    #cv2.imshow('piece', self.pieces[a].input*np.repeat(self.pieces[a].edge_neighbours_mask(i, 5)[:,:,None], 3, axis=2))
-    #cv2.waitKey()
-
-    t1 = time.time()
-    print('Extracted edges in %.2f ms' % (1000*(t1-t0)))
+        #if top[-2]/top[-1] < .9:
+        b,j = i_top[0][-1], i_top[1][-1]
+        """
+        pa = self.pieces[a]
+        ema = pa.edge_neighbours_mask(i,5)
+        ima = pa.input.copy()
+        ima[ema.astype(bool)] = [0,255,0]
+        pb = self.pieces[b]
+        emb = pb.edge_neighbours_mask(j,5)
+        imb = pb.input.copy()
+        imb[emb.astype(bool)] = [0,255,0]
+        cv2.imshow('piece a', ima)
+        cv2.imshow('piece b', imb)
+        cv2.waitKey(0)
+        """
 
   def show_color ( self, block=True, title='Puzzle [color]' ):
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
