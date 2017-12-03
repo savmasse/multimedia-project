@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
 
-from .exception import Unsolvable, Guess
+###############################################################################
+
+blue  = (255,0,0)
+green = (0,255,0)
+red   = (0,0,255)
+
+###############################################################################
+
+from .exception import Unsolvable
 from snippets   import draw_cross, show, seg_intersect
-from colors     import red,green,blue,black,white
 
 import cv2
 import numpy as np
@@ -16,6 +23,7 @@ class Piece:
   def from_contour ( self, img_puzzle, img_puzzle_gray, contour, corners, jigsaw=False ):
     xmin,ymin = offset = contour.min(axis=0).squeeze()
     xmax,ymax =  contour.max(axis=0).squeeze()
+    self.offset = offset
     self.input = img_puzzle[ymin:ymax+1, xmin:xmax+1]
     self.gray = img_puzzle_gray[ymin:ymax+1, xmin:xmax+1]
     self.mask = np.logical_or(
@@ -33,8 +41,9 @@ class Piece:
 
     return self # voor generator expressies
 
-  def from_slice ( self, img_slice ):
+  def from_slice ( self, img_slice, offset ):
     self.input = img_slice
+    self.offset = offset
     self.mask = np.ones(self.input.shape[:2], dtype=np.uint8)
     self.contour = np.array([ # TODO: zelfde vorm maken als andere contours
       [[0,0]],
@@ -55,10 +64,14 @@ class Piece:
     pt2 = self.corners[(side+1)%len(self.corners)].squeeze()
     cv2.line(mask, tuple(pt1), tuple(pt2), 1, radius, lineType=8)
 
-    # Erase tip
+    # Erase tip (draw black square orthogonal on the tip
     if self.tips and self.tips[side]:
-      _,_,_,(pl,pr),_ = self.tips[side]
-      cv2.line(mask, tuple(pl), tuple(pr), 0, radius+5, lineType=8)
+      _,_,(l,r),_,_,_,m = self.tips[side]
+      o = 2*m-l-r
+      lo = l+o
+      ro = r+o
+      pts = np.array([l, lo, ro, r], dtype=int)
+      cv2.fillConvexPoly(mask, pts, 0)
 
     # Dont mask outer border pixels to avoid picking up background colors from aliasing
     if np.any(np.logical_and(pt1[0]-pt2[0],pt1[1]-pt2[1])):  # indien schuin
@@ -100,8 +113,8 @@ class Piece:
         arcx = arc[:,0]
         arcy = arc[:,1]
         ox,oy = o  = ([1,-1]*s[::-1]*(d_top+10)/ds).astype(np.int) # orthogonaal
-        cx,cy = top + o
-        dx,dy = top - o
+        cx,cy = c = top + o
+        dx,dy = d = top - o
         signed_dists_ortho = ((oy*arcx - ox*arcy) + (dx*cy-dy*cx))/np.hypot(ox,oy)
         dists_ortho = np.abs(signed_dists_ortho)
         # > determine left or right based on manhattan distance to first corner
@@ -116,15 +129,22 @@ class Piece:
         ol2 = left + o
         or2 = right + o
         pl = seg_intersect(a,b, left,ol2).astype(int)
-        pr= seg_intersect(a,b, right,or2).astype(int)
+        pr = seg_intersect(a,b, right,or2).astype(int)
 
+        # Distance from corner A to the middle of the Tip
+        # (already calculated, but not sooo heavy to recalculate)
+        m = (pl+pr)/2
+        am = m-a
+        dam = np.hypot(*am)
 
         self.tips.append((
           signed_dists[i_top] < 0, # TRUE = MALE; FALSE = FEMALE
           top,
           (left, right),
-          (pl, pr), # positie niet wijzigen
-          arc[:,None,:] # CONTOUR (open),
+          (pl, pr), # index in tips niet meer wijzigen!
+          arc[:,None,:], # CONTOUR (open)
+          dam/ds,
+          m# relative position of the top [0,1] where 0 = @A and 1=@B
         ))
 
         #SELFTEST
@@ -152,28 +172,31 @@ class Piece:
     if view: show(self.gray, block, title)
     return self.gray
 
-  def show_info ( self, block=True, title='Piece [info]', view=True ):
-    offset = [10,10]
-    img = cv2.copyMakeBorder(64*np.repeat(self.mask[:,:,None], 3, axis=2), *offset, *offset, cv2.BORDER_CONSTANT, value=black)
+  def show_info ( self, out=None, block=True, title='Piece [info]', view=True, offset=[0,0], stacked=True ):
+    if out is None:
+      out = cv2.copyMakeBorder(64*np.repeat(self.mask[:,:,None], 3, axis=2), *offset, *offset, cv2.BORDER_CONSTANT, value=black)
+      offset = [10,10]
 
     # Draw contours
-    cv2.drawContours(img, [self.contour], -1, (205,72,72), 2, offset=tuple(offset))
+    cv2.drawContours(out, [self.contour], -1, (205,72,72), 2, offset=tuple(offset))
 
     # Draw fitted rectangle
     # TODO: * mask * ~mask_tip
     for i in range(len(self.corners)):
-      if self.sides[i] == 0: # square
+      length = self.sides[i]
+      nextlength = self.sides[(i+1)%len(self.sides)]
+
+      if length == nextlength: # square
         color = (100,16,16)
-      elif self.sides[i] == 1: # short
+      elif length < nextlength: # short
         color = (200,0,200)
-      elif self.sides[i] == 2: # long
+      else: # long
         color = (0,200,200)
-      else:
-        color = (70,96,162)
+
       pts = offset+np.roll(self.corners, -i, axis=0)[:2, 0]
       pt1 = pts[0]
       pt2 = pts[1]
-      cv2.line(img, tuple(pt1), tuple(pt2), color, 1)
+      cv2.line(out, tuple(pt1), tuple(pt2), color, 1)
 
     # Draw tips
     if self.tips != False:
@@ -181,23 +204,37 @@ class Piece:
         if tip is None:
           continue
 
-        male, top, (left,right), (proj_l,proj_r), arc = tip
+        male, top, (left,right), (proj_l,proj_r), arc, rel_dist = tip
 
-        # Tip contour
-        cv2.polylines(img, [arc+offset], False, green, 2, lineType=8)
+        # Contour
+        cv2.polylines(out, [arc+offset], False, green, 2, lineType=8)
 
-        # Tip markers
+        # Markers
         top_color = (255,0,255) if male else red
-        draw_cross(img, offset+top, 5, top_color)
-        draw_cross(img, offset+left,  5, green)
-        draw_cross(img, offset+right, 5, blue)
-        draw_cross(img, offset+proj_l, 3, green)
-        draw_cross(img, offset+proj_r, 3, blue)
+        draw_cross(out, offset+top, 5, top_color)
+        draw_cross(out, offset+left,  5, green)
+        draw_cross(out, offset+right, 5, blue)
+        draw_cross(out, offset+proj_l, 3, green)
+        draw_cross(out, offset+proj_r, 3, blue)
+
+        # Ratio
+        cv2.putText(out,'%.1f'%(100*rel_dist), tuple(offset+[-12,6]+3*top-left-right), cv2.FONT_HERSHEY_SIMPLEX, .33, (255,255,255), 1)
 
     # Show on screen
-    if view:
-      img = np.hstack((cv2.copyMakeBorder(self.input, *offset, *offset, cv2.BORDER_CONSTANT, value=(0,0,0)), img))
-      show(img, block, title)
+    if stacked:
+      img = np.hstack((cv2.copyMakeBorder(self.input, *offset, *offset, cv2.BORDER_CONSTANT, value=(0,0,0)), out))
+      if view:
+        show(img, block, title)
+
+    return out
+
+  def draw_contour ( self, out, color=255, **line_params):
+    cv2.drawContours(out, [self.contour], -1, color=color, **line_params)
+
+  def draw_side ( self, out, side, color=255, offset=[0,0], **line_params):
+    pt1 = offset + self.corners[side, 0]
+    pt2 = offset + self.corners[(side+1)%len(self.corners), 0]
+    cv2.line(out, tuple(pt1), tuple(pt2), color, **line_params)
 
   """
   def rotate ( self ):

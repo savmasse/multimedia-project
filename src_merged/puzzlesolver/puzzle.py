@@ -2,12 +2,24 @@
 
 # TODO: niet enkel contour nemen (sommige afbeeldingen hebben floating islands)
 
-from .exception import Unsolvable
+from .exception import Unsolvable, Debug
 from .piece import Piece
+from .grid import Grid
+
+from snippets import draw_cross
 
 import cv2
 import numpy as np
+from numpy import array as arr
 from scipy.signal import argrelmax as arm
+
+###############################################################################
+
+blue  = (255,0,0)
+green = (0,255,0)
+red   = (0,0,255)
+
+###############################################################################
 
 class Puzzle:
 
@@ -70,24 +82,7 @@ class Puzzle:
       else:
         self.check_scrambled()
 
-    # Lengtes bepalen
-    vecs = np.diff(np.pad([piece.corners for piece in self.pieces], ((0,0),(0,1),(0,0),(0,0)), 'wrap'), axis=1).squeeze()
-    lens = np.hypot(vecs[:,:,0], vecs[:,:,1])
-
-    srtd = np.sort(lens.ravel())
-    half = int(len(srtd)/2)
-
-    if abs(srtd[:half][-1]-srtd[half:][0]) < 10:
-      sides = [0]*4 # 0 = same len
-      for piece in self.pieces:
-        piece.sides = sides
-    else:
-      short = int(np.rint(np.median(srtd[half:], overwrite_input=True)))
-      for a in range(len(self.pieces)):
-        if abs(lens[a,0]-short) < 10:
-          self.pieces[a].sides = [2,1,2,1] # 1 = short
-        else:
-          self.pieces[a].sides = [1,2,1,2] # 2 = long
+    self.check_size()
 
   def extract_tiles ( self, polygons ):
     """ Haal tegels uit de contouren """
@@ -141,7 +136,7 @@ class Puzzle:
       idx = sorted([i for i,sp in possibles[:4]])
 
       # Bijhouden om op te slaan als hoekpunten in de klasse
-      rectangles.append(np.array(polygon[idx]))
+      rectangles.append(arr(polygon[idx]))
 
     # Puzzeltype opslaan
     self.corners = rectangles
@@ -176,10 +171,6 @@ class Puzzle:
         max(reversed(ratio_caught_x), key=lambda nr: nr[1])[0]
       )
     except:
-      """
-      cv2.imshow('segment_tiles(): geen matches', cv2.convertScaleAbs(img))
-      cv2.waitKey(10)
-      """
 
       if not len(ratio_caught_x):
         print('Geen verticale segment scheidingslijnen kunnen matchen')
@@ -195,12 +186,14 @@ class Puzzle:
         print('Langs de horizontale as:', ', '.join('{%i → %.2f}' % nr for nr in ratio_caught_y))
 
       """
+      cv2.imshow('segment_tiles(): geen matches', self.input)
+      cv2.waitKey(10)
       from matplotlib import pyplot as plt
       plt.figure(figsize=(20,10))
-      plt.subplot(1,2,1)
+      plt.subplot(2,1,1)
       plt.plot(dx[1:-1])
       plt.scatter(arm_x-2, dx[arm_x], color='red')
-      plt.subplot(1,2,2)
+      plt.subplot(2,1,2)
       plt.plot(dy[1:-1])
       plt.scatter(arm_y-2, dy[arm_y], color='red')
       plt.show(block=True)
@@ -213,7 +206,11 @@ class Puzzle:
     # Puzzelstukken genereren
     h,w = [img.shape[i]/self.shape[i] for i in range(2)]
     self.pieces = [
-      Piece().from_slice(self.input[1+int(y*h):1+int((y+1)*h),1+int(x*w):1+int((x+1)*w)])
+      Piece().from_slice(
+        self.input[ 1+int(y*h) : 1+int((y+1)*h),
+                    1+int(x*w) : 1+int((x+1)*w) ],
+        offset=[1+int(y*h), 1+int(x*w)]
+      )
       for y in range(self.shape[0])
       for x in range(self.shape[1])
     ]
@@ -222,26 +219,93 @@ class Puzzle:
     """ Controleer of de puzzelstukken rechtop staan [incl. rotaties n*90°] """
 
     self.scrambled = False
-
     # Zoek een schuine lijn tussen de reeds gevonden hoeken [self.corners]
     for corners in self.corners:
       if np.any(np.all(np.diff(corners.squeeze(), axis=0), axis=1)):
         self.scrambled = True
         break
 
+  def check_size ( self ):
+    vecs = np.diff(np.pad([piece.corners for piece in self.pieces], ((0,0),(0,1),(0,0),(0,0)), 'wrap'), axis=1).squeeze()
+    lens = np.hypot(vecs[:,:,0], vecs[:,:,1])
+
+    srtd = np.sort(lens.ravel())
+    half = int(len(srtd)/2)
+
+    if abs(srtd[:half][-1]-srtd[half:][0]) < 10:
+      sides = arr([srtd[half]]*4) # 0 = same len
+      for piece in self.pieces:
+        piece.sides = sides
+    else:
+      short = int(np.rint(np.median(srtd[half:], overwrite_input=True)))
+      long  = int(np.rint(np.median(srtd[:half], overwrite_input=True)))
+      self.size = (short,long)
+
+      for a in range(len(self.pieces)):
+        if abs(lens[a,0]-short) < 10:
+          self.pieces[a].sides = arr([long,short,long,short]) # 1 = short
+        else:
+          self.pieces[a].sides = arr([short,long,short,long]) # 2 = long
+
+
   def compatibility_matrix ( self ):
     # Genereer volledig toegelaten output matrix
-    n_pieces = len(self.pieces)
-    matrix = np.ones((n_pieces,4, n_pieces,4), dtype=bool)
+    n = len(self.pieces)
+    matrix = np.ones((n,4, n,4), dtype=bool)
 
     # Diagonaal niet toelaten
     #  = een puzzelstuk kan zijn eigen randen niet met elkaar matchen
-    for ab in range(n_pieces):
+    for ab in range(n):
       matrix[ab,:,ab,:] = False
+
+    # QuickVar
+    diag = np.zeros((4,4), dtype=bool)
+    np.fill_diagonal(diag, True)
+
+    for a, pa in enumerate(self.pieces):
+      for b, pb in enumerate(self.pieces):
+        # TODO: diagonaal vullen en mirrorren
+
+        mat = matrix[a,:,b,:]
+        # Zijden moeten even lang zijn
+        # (+- even lange zijden hebben dezelfde waarde gekregen)
+        sidelen_ok = pa.sides[:,None] == pb.sides[None,:]
+        np.logical_and(sidelen_ok, mat, out=mat)
+
+        # Jigsaw
+        if pa.tips and pb.tips:
+          # TODO: zo veel mogelijk logica mergen
+
+          # Beide zijden moeten een Tip hebben
+          # > verwijdert platte zijden en incompatibele Tips
+          # [+ versnelt uitvoering]
+          pat = arr([(1 if tip[0] else -1) if tip is not None else 0.5 for tip in pa.tips])[:,None]
+          pbt = arr([(1 if tip[0] else -1) if tip is not None else 0.5 for tip in pb.tips])[None,:]
+          tipcompat_ok = np.logical_not(pat+pbt)
+          np.logical_and(tipcompat_ok, mat, out=mat)
+
+          # Jigsaw Tips moeten op (ongeveer) dezelfde positie zitten
+          # [+ versnelt uitvoering]
+          pap = arr([tip[5] if tip is not None else 0 for tip in pa.tips])[:,None]
+          pbp = arr([tip[5] if tip is not None else 0 for tip in pb.tips])[None,:]
+          # MAX AFWIJKING RATIO V ZIJDE (opgelet, korte zijden hebben een kleinere marge dan lange door relatief te werken...)
+          tippos = np.abs(pap+pbp-1)
+          tippos_ok = tippos < .02 # TODO: afhankelijk maken van de absolute grootte van het puzzelstuk (en nieit meer relatief werken)
+          np.logical_and(tippos_ok, mat, out=mat)
+
+          # De vlakke zijden langs de rand moeten verplicht doorlopen
+          # > zou ook kunnen via convolutie achtige methode (met condities?)
+          # [- vertraagt uitvoering ] 600ms
+          waf = np.where([tip is None for tip in pa.tips])[0]
+          wnbf = arr(np.where([tip is not None for tip in pb.tips])[0])
+
+          for i in waf:
+            mat[i-1][(wnbf+1)%4] = False
+            mat[(i+1)%4][(wnbf+3)%4] = False
 
     return matrix
 
-  def histogram_correlation_matrix ( self, radius=5, hsv=False, channels=range(3), where=False ):
+  def histogram_correlation_matrix ( self, radius=5, hsv=False, channels=range(3), mask=None ):
     """ Genereer een matrix die de correlatie tussen histogrammen van elk paar randen berekent """
 
     # Histogrammen berekenen
@@ -270,7 +334,8 @@ class Puzzle:
 
     # Vul matrix met correlatie van histogrammen
     # TODO: support voor andere cv2.HISTCMP_ algoritmen [! output betekenis wijzigt !]
-    if where: # TODO: dit is trager, terwijl het sneller zou moeten zijn (cache misses/where generatie/steeds herindexeren?)
+    if mask is not None:
+      where = np.where(mask)# TODO: dit was trager?
       for a,i,b,j in zip(*where):
         matrix[a,i,b,j] = matrix[a,i,b,j] = \
           cv2.compareHist(hists[a][i], hists[b][j], cv2.HISTCMP_CORREL)
@@ -286,32 +351,107 @@ class Puzzle:
 
   def solve ( self ):
     M_compatible = self.compatibility_matrix()
-    M_histograms = self.histogram_correlation_matrix(where=np.where(M_compatible)) # TODO: gebruik M_compatible masker
+    grid = Grid(M_compatible)
 
+    "Console DEBUGGING"
     n_pieces = len(self.pieces)
-    n_top = 10
+    per_side = M_compatible.sum()/(n_pieces*4)
+    total = np.prod(M_compatible.shape)/(n_pieces*4)
+    goal = np.prod(self.shape)*4-np.sum(self.shape)*2
+    at = M_compatible.sum()
+    print('%i possible matches down to %.2f per side (%.2f%%) [%i/%i]' % (total, per_side, 100*per_side/total, at, goal))
+    "END OF DEBUGGING"
 
-    for a in range(n_pieces):
-      for i in range(4):
-        cmp = M_histograms[a,i]
-        asrt = np.argsort(cmp, None)[:-4] # 4x NaN
-        i_top = np.unravel_index(asrt[-n_top:], cmp.shape)
+    grid.shrink()
+    if not grid.finished:
+      M_histograms = self.histogram_correlation_matrix(mask=M_compatible) # TODO: gebruik M_compatible masker
+      grid.apply_weights(M_histograms)
 
-        #if top[-2]/top[-1] < .9:
-        b,j = i_top[0][-1], i_top[1][-1]
-        """
+    if grid.finished:
+      print('SOLVED')
+      solution = grid.build()
+      return solution
+    else:
+      print('UNSOLVED')
+      return False
+
+  def show_compatibility ( self, matrix, weights=None ):
+    cv2.namedWindow('Compatibility', cv2.WINDOW_NORMAL)
+    for a, pa in enumerate(self.pieces):
+      for i, links in enumerate(matrix[a]):
+        img = self.input.copy()
+
         pa = self.pieces[a]
-        ema = pa.edge_neighbours_mask(i,5)
-        ima = pa.input.copy()
-        ima[ema.astype(bool)] = [0,255,0]
-        pb = self.pieces[b]
-        emb = pb.edge_neighbours_mask(j,5)
-        imb = pb.input.copy()
-        imb[emb.astype(bool)] = [0,255,0]
-        cv2.imshow('piece a', ima)
-        cv2.imshow('piece b', imb)
-        cv2.waitKey(0)
-        """
+        pa.draw_side(img, i, blue, offset=pa.offset, thickness=8)
+
+        bb,jj = np.where(links)
+        if len(bb):
+          for b,j in zip(bb,jj):
+            pb = self.pieces[b]
+            redgreen = lambda w: tuple(np.clip([0,512*w,512*(1-w)], 0, 255))
+            if weights is None:
+              pb.draw_side(img, j, green, offset=pb.offset, thickness=4)
+            else:
+              w = abs(weights[a,i,b,j])
+              pb.draw_side(img, j, redgreen(w), offset=pb.offset, thickness=3+int(4*w))
+        else:
+          continue
+
+        cv2.imshow('Compatibility', img)
+        cv2.waitKey()
+
+  def show_info ( self, block=True ):
+    img = np.repeat(32*self.mask.astype(np.uint8)[:,:,None], 3, 2)
+    for p in self.pieces:
+      p.show_info(img, block=block, view=False, offset=p.offset, stacked=False)
+    cv2.namedWindow('Puzzle Info', cv2.WINDOW_NORMAL)
+    cv2.imshow('Puzzle Info', img)
+
+  def show_solution ( self, grid ):
+    print('-----------SHOW SOLUTION-------------')
+    # not following the opencv X,Y conventions
+    pcs = grid[:,:,0]
+    ori = grid[:,:,1]
+
+    # Determine puzzle size
+    w,h = self.pieces[pcs[np.where(ori == 0)][0]].sides[:2]
+    img = np.zeros((int(np.rint(w*pcs.shape[0])), int(np.rint(h*pcs.shape[1])), 3), dtype=np.uint8)
+    # Draw pieces
+    # TODO: niet omzetten naar int in super fn en werken met np.where(~isnan())
+    for x in range(grid.shape[0]):
+      for y in range(grid.shape[1]):
+        p = self.pieces[pcs[x,y]]
+        pts_from = p.corners[:3,0].astype(np.float32)
+        pts_to = arr([
+          [(x+1)*w,y*h],
+          [x*w,y*h],
+          [x*w,(y+1)*h]
+        ], dtype=np.float32)
+        print(pts_to.astype(int))
+        M_transform = cv2.getAffineTransform(pts_from, pts_to)
+        img_piece = cv2.warpAffine(p.input, M_transform, img.shape[:2])
+        print(img.shape)
+        print(img_piece.shape)
+        print(img.shape[:2])
+        try:
+          img += img_piece*(img_piece>0)
+        except:
+          img_piece = np.rot90(img_piece, 1, (0,1))
+          img += img_piece*(img_piece>0)
+        for pt in pts_to:
+          draw_cross(img, tuple(pt.astype(int)), 4, blue)
+
+    # SHOW LOLOLOL, spanneeend
+    cv2.namedWindow('output', cv2.WINDOW_NORMAL)
+    cv2.imshow('output', cv2.convertScaleAbs(img))
+    cv2.waitKey(0)
+
+
+    #M = cv2.getAffineTransform(pts1,pts2)
+    #dst = cv2.warpAffine(img,M,(cols,rows))
+
+
+    #raise Debug
 
   def show_color ( self, block=True, title='Puzzle [color]' ):
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
