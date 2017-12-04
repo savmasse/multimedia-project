@@ -1,62 +1,81 @@
 # -*- coding: utf-8 -*-
 
+###############################################################################
+
+import cv2
 import glob
-import time
 from puzzlesolver import Puzzle, Unsolvable
 from puzzlesolver.exception import Debug
-import numpy as np
+from snippets import Time, Count
 
-print('>─────────────────────────────────────────────────────────────<')
+###############################################################################
 
-def execute ():
-  # Kies welke puzzels je wil laden
-  paths = []
-  #paths.extend(glob.glob('../img/**/*tile*.png', recursive=True))
-  #paths.extend(glob.glob('../img/**/*jig*scr*3x3*.png', recursive=True))
-  #paths.extend(glob.glob('../img/**/*jigsaw*scrambled*5x5*.png', recursive=True))
-  paths.extend(glob.glob('../img/**/*jigsaw*2x3*.png', recursive=True))
-  #paths.extend(glob.glob('../img/**/*.png', recursive=True))
+graph = False
+filt = {
+  'shape' : "j",
+  'size'  : "5",
+  'order' : "sc",
+  'n'     : ""
+}
+blocking = {
+  'show_success': True,
+  'show_failure': False
+}
+params = {
+  #'methods': [], # enkel shrinken
+  'methods': [('histcmp', cv2.HISTCMP_CORREL, 'best_weight')],
+}
 
-  times = []
-  n_solved = 0
-  t0 = time.time()
-  for path in sorted(paths):
-    puzzle = Puzzle(path)
-    try:
-      ta = time.time()
-      puzzle.extract_pieces()
-      dt = time.time()-ta
-      times.append(dt)
-      grid_solution = puzzle.solve()
-      if grid_solution is not False:
-        n_solved += 1
-        puzzle.show_solution(grid_solution)
+###############################################################################
 
-      print(puzzle.correct(path), '%.02f' % np.round(1000*(dt), 2), path)
-      #puzzle.show_info(False)
-      #puzzle.show_compatibility(solution, weights=puzzle.histogram_correlation_matrix())
-    except Unsolvable as exc:
-      print(puzzle.correct(path), 'ERR ', path)
-      print(exc)
-      continue
-    except Debug as exc:
-      return
-    finally:
-      print(''.join(['─']*(len(path)+12)))
-  t1 = time.time()
+def execute ( shape, size, order, n, methods, show_failure=True, show_success=True ):
+  # Zoek puzzel afbeeldingen
+  query = '*%s*_*%s*_*%s*_*%s*' % (shape, order, size, n)
+  paths = sorted(glob.glob('../img/**/%s.png' % query, recursive=True))
+  if len(paths): print('%s┐' % ''.join(['─']*(len(paths[0])+11)))
+  # Hou statistieken bij
+  with Time('Uitvoeringstijd') as exec_timer,\
+       Count('Opgeloste puzzels', msg='%%s: %%i/%i'%len(paths)) as n_solved:
+
+    # Overloop de gekozen puzzels
+    for path in paths:
+      try:
+        msg = '   '
+
+        puzzle = Puzzle(path)
+
+        with Time('Piece extraction'):
+          puzzle.extract_pieces()
+
+        with Time('Solution'):
+          if show_failure:
+            grid = puzzle.solve(radius=2, methods=methods, show_failure=exec_timer)
+          else:
+            grid = puzzle.solve(radius=2, methods=methods)
+          if grid is not False:
+            n_solved.count()
+
+        with exec_timer.pause():
+          if show_success:
+            puzzle.show_color(block=False)
+            puzzle.show_solution(grid)
+            #puzzle.show_compatibility(puzzle.compatibility_matrix(), weights=puzzle.histogram_correlation_matrix())
+
+      except Unsolvable as exc:
+        msg = 'EXC'
+        print(exc)
+      except Debug as exc:
+        msg = 'DBG'
+        return
+
+      finally:
+        print(puzzle.correct(path), msg, path)
+        print('%s┤' % ''.join(['─']*(len(path)+11)))
 
   #from matplotlib import pyplot as plt
   #plt.hist(times, int(np.ceil(max(times)/.00025)), (0,max(times)))
-
-  print('Uitvoeringstijd: %i ms' % int((t1-t0)*1000))
-  print('Successvol opgelost: %i (%.2f%%)' % (n_solved, 100*n_solved/len(paths)))
-
-  import cv2
   cv2.destroyAllWindows()
-
-
-graph = False
-
+  if len(paths): print('%s┘' % ''.join(['─']*(len(paths[-1])+11)))
 if graph:
   from pycallgraph import PyCallGraph
   from pycallgraph.output import GraphvizOutput
@@ -66,6 +85,6 @@ if graph:
   output.output_type = 'svg'
 
   with PyCallGraph(output=output):
-    execute()
+    execute(**params, **blocking, **filt)
 else:
-  execute()
+  execute(**params, **blocking, **filt)

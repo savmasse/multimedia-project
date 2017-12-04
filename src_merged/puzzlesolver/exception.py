@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 
 class Unsolvable(Exception):
-  pass
+
+  def __init__ ( self, *log, data=None ):
+    super(Unsolvable, self).__init__( *log )
+    self.data = data
 
 class Debug(Exception):
-  def __init__ ( *log ):
-    for l in log[1:]:
+  def __init__ ( self, *log ):
+    for l in log:
       print(l)

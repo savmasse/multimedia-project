@@ -13,6 +13,7 @@ from snippets   import draw_cross, show, seg_intersect
 
 import cv2
 import numpy as np
+from numpy import array as arr
 from matplotlib import pyplot as plt
 
 class Piece:
@@ -45,12 +46,12 @@ class Piece:
     self.input = img_slice
     self.offset = offset
     self.mask = np.ones(self.input.shape[:2], dtype=np.uint8)
-    self.contour = np.array([ # TODO: zelfde vorm maken als andere contours
+    self.contour = (arr([
       [[0,0]],
-      [[0, self.input.shape[0]]],
-      [self.input.shape[1::-1]],
-      [[self.input.shape[1], 0]]
-    ])
+      [[0,1]],
+      [[1,1]],
+      [[1,0]]
+    ]) * arr(self.input.shape[:2])[::-1]-1).astype(int)
     self.corners = self.contour
     self.tips = False
 
@@ -74,7 +75,7 @@ class Piece:
       cv2.fillConvexPoly(mask, pts, 0)
 
     # Dont mask outer border pixels to avoid picking up background colors from aliasing
-    if np.any(np.logical_and(pt1[0]-pt2[0],pt1[1]-pt2[1])):  # indien schuin
+    if np.any(np.logical_and(pt1[0]-pt2[0],pt1[1]-pt2[1])):  # weinig invloed..
       cv2.drawContours(mask, [self.contour], -1, 0, 1, 8)
 
     return mask*self.mask
@@ -156,7 +157,6 @@ class Piece:
 
     if not len([True for tip in self.tips if tip is not None]):
       self.tips = False
-      #self.show_info()
       raise Unsolvable('Jigsaw zonder tips')
 
 
@@ -172,10 +172,20 @@ class Piece:
     if view: show(self.gray, block, title)
     return self.gray
 
-  def show_info ( self, out=None, block=True, title='Piece [info]', view=True, offset=[0,0], stacked=True ):
+  def show_info ( self, out=None, block=True, title='Piece [info]', view=True, offset=[0,0], stacked=True, id=None ):
     if out is None:
       out = cv2.copyMakeBorder(64*np.repeat(self.mask[:,:,None], 3, axis=2), *offset, *offset, cv2.BORDER_CONSTANT, value=black)
       offset = [10,10]
+
+    # Draw ID in centroid of the contour
+    if id is not None:
+      txtsize = cv2.getTextSize(str(id), cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
+      M = cv2.moments(self.corners)
+      center = arr([
+        M['m10']/M['m00'] - txtsize[0]/2,
+        M['m01']/M['m00'] + txtsize[1]/2
+      ])
+      cv2.putText(out, str(id), tuple((offset+center).astype(int)), cv2.FONT_HERSHEY_SIMPLEX, 1, (64,64,64), 2)
 
     # Draw contours
     cv2.drawContours(out, [self.contour], -1, (205,72,72), 2, offset=tuple(offset))
@@ -204,7 +214,7 @@ class Piece:
         if tip is None:
           continue
 
-        male, top, (left,right), (proj_l,proj_r), arc, rel_dist = tip
+        male, top, (left,right), (proj_l,proj_r), arc, rel_dist,_ = tip
 
         # Contour
         cv2.polylines(out, [arc+offset], False, green, 2, lineType=8)
@@ -235,20 +245,3 @@ class Piece:
     pt1 = offset + self.corners[side, 0]
     pt2 = offset + self.corners[(side+1)%len(self.corners), 0]
     cv2.line(out, tuple(pt1), tuple(pt2), color, **line_params)
-
-  """
-  def rotate ( self ):
-    cnt = np.pad(self.corners.squeeze(), ((0,1),(0,0)), 'wrap')
-    lines = np.diff(cnt, axis=0).astype(np.float)
-
-    p = int(max(self.input.shape))
-    img = np.pad(self.input, ((p,p),(p,p),(0,0)), 'constant')
-
-    angle = - ((np.arctan2(lines[:,0], lines[:,1])*180/np.pi+180)%90).mean()
-    center = tuple(np.array(img.shape[:2])/2)
-    M = cv2.getRotationMatrix2D(center, angle, 1)
-    rotated = cv2.warpAffine(img, M, img.shape[:2])
-
-    ((ymin,ymax),(xmin,xmax)) = bounding_box(rotated)
-    self.rotated = rotated[ymin-1:ymax+1, xmin-1:xmax+1]
-  """

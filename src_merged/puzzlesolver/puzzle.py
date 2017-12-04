@@ -6,7 +6,7 @@ from .exception import Unsolvable, Debug
 from .piece import Piece
 from .grid import Grid
 
-from snippets import draw_cross
+from snippets import Grid_solution_stats
 
 import cv2
 import numpy as np
@@ -18,6 +18,7 @@ from scipy.signal import argrelmax as arm
 blue  = (255,0,0)
 green = (0,255,0)
 red   = (0,0,255)
+redgreen = lambda w: tuple(np.clip([0,512*w,512*(1-w)], 0, 255))
 
 ###############################################################################
 
@@ -209,7 +210,7 @@ class Puzzle:
       Piece().from_slice(
         self.input[ 1+int(y*h) : 1+int((y+1)*h),
                     1+int(x*w) : 1+int((x+1)*w) ],
-        offset=[1+int(y*h), 1+int(x*w)]
+        offset=[1+int(x*w), 1+int(y*h)]
       )
       for y in range(self.shape[0])
       for x in range(self.shape[1])
@@ -221,7 +222,7 @@ class Puzzle:
     self.scrambled = False
     # Zoek een schuine lijn tussen de reeds gevonden hoeken [self.corners]
     for corners in self.corners:
-      if np.any(np.all(np.diff(corners.squeeze(), axis=0), axis=1)):
+      if np.all(np.diff(corners.squeeze(), axis=0), axis=1).sum() > 1:
         self.scrambled = True
         break
 
@@ -305,7 +306,7 @@ class Puzzle:
 
     return matrix
 
-  def histogram_correlation_matrix ( self, radius=5, hsv=False, channels=range(3), mask=None ):
+  def histogram_correlation_matrix ( self, radius=5, hsv=False, channels=range(3), mask=None, method=cv2.HISTCMP_CORREL ):
     """ Genereer een matrix die de correlatie tussen histogrammen van elk paar randen berekent """
 
     # Histogrammen berekenen
@@ -333,12 +334,12 @@ class Puzzle:
     matrix.fill(np.nan) # controleer of enkel de diagonaal achteraf NaN blijft
 
     # Vul matrix met correlatie van histogrammen
-    # TODO: support voor andere cv2.HISTCMP_ algoritmen [! output betekenis wijzigt !]
+    # TODO: support voor andere cv2.HISTCMP_ algoritmen
     if mask is not None:
-      where = np.where(mask)# TODO: dit was trager?
+      where = np.where(mask)
       for a,i,b,j in zip(*where):
         matrix[a,i,b,j] = matrix[a,i,b,j] = \
-          cv2.compareHist(hists[a][i], hists[b][j], cv2.HISTCMP_CORREL)
+          cv2.compareHist(hists[a][i], hists[b][j], method)
     else:
       for a, a_edges in enumerate(hists):
         for b, b_edges in enumerate(hists):
@@ -346,112 +347,149 @@ class Puzzle:
             for i, a_edge_hist in enumerate(a_edges):
               for j, b_edge_hist in enumerate(b_edges):
                 matrix[a,i,b,j] = matrix[a,i,b,j] = \
-                  cv2.compareHist(a_edge_hist, b_edge_hist, cv2.HISTCMP_CORREL)
+                  cv2.compareHist(a_edge_hist, b_edge_hist, method)
+
+    # TODO: output omzetten naar correcte waarden
+    matrix = np.abs(matrix) # TODO: willekeurig gedaan! check of dit wel nodig is
+
+
     return matrix
 
-  def solve ( self ):
+  def solve ( self, print_stats=True, radius=5, methods=[('histcmp', cv2.HISTCMP_CORREL, 'best_weight')], show_failure=False ):
+
+    print('METHODS=', methods)
+
     M_compatible = self.compatibility_matrix()
     grid = Grid(M_compatible)
 
-    "Console DEBUGGING"
-    n_pieces = len(self.pieces)
-    per_side = M_compatible.sum()/(n_pieces*4)
-    total = np.prod(M_compatible.shape)/(n_pieces*4)
-    goal = np.prod(self.shape)*4-np.sum(self.shape)*2
-    at = M_compatible.sum()
-    print('%i possible matches down to %.2f per side (%.2f%%) [%i/%i]' % (total, per_side, 100*per_side/total, at, goal))
-    "END OF DEBUGGING"
+    with Grid_solution_stats(grid, 'shrink', print_stats):
+      grid.shrink()
 
-    grid.shrink()
-    if not grid.finished:
-      M_histograms = self.histogram_correlation_matrix(mask=M_compatible) # TODO: gebruik M_compatible masker
-      grid.apply_weights(M_histograms)
+    for method, param, key in methods:
+      if not grid.finished:
+        with Grid_solution_stats(grid, '%s(%s)' % (method,param), print_stats):
+          if method == 'histcmp':
+            M_histograms = self.histogram_correlation_matrix(mask=M_compatible, radius=radius, method=param) # TODO: gebruik M_compatible masker
+            grid.apply_weights(M_histograms, key=key)
+          grid.shrink()
+
+    if print_stats:
+      grid.print_stats(goal=np.prod(self.shape)*4-np.sum(self.shape)*2)
 
     if grid.finished:
-      print('SOLVED')
-      solution = grid.build()
+      try:
+        solution = grid.build()
+      except Unsolvable as dump:
+        if show_failure:
+          with show_failure.pause():
+            print(dump.data[:,:,0])
+            try:
+              self.show_compatibility(grid.matrix, M_histograms, block=False)
+            except:
+              self.show_compatibility(grid.matrix, block=False)
+            self.show_solution(dump.data)
+        raise dump
       return solution
     else:
-      print('UNSOLVED')
       return False
 
-  def show_compatibility ( self, matrix, weights=None ):
-    cv2.namedWindow('Compatibility', cv2.WINDOW_NORMAL)
-    for a, pa in enumerate(self.pieces):
-      for i, links in enumerate(matrix[a]):
-        img = self.input.copy()
+  def show_compatibility ( self, matrix, weights=None, abstract=True, title='Compatibility', block=True ):
+    cv2.namedWindow(title, cv2.WINDOW_NORMAL)
+    cv2.createTrackbar('a * i', title, 0, len(self.pieces)*4-1, self._cb_update_compat_trackbars)
+    cv2.createTrackbar('[a] piece', title, 0, len(self.pieces)-1, self._cb_show_compatibility)
+    cv2.createTrackbar('[i] side', title, 0, 3, self._cb_show_compatibility)
+    self._cb_compat_mat = matrix
+    self._cb_compat_win = title
+    self._cb_compat_wts = weights
+    self._cb_compat_pause = False
 
-        pa = self.pieces[a]
-        pa.draw_side(img, i, blue, offset=pa.offset, thickness=8)
+    if abstract == True:
+      self._cb_compat_src = self.show_info(show=False,block=False)
+    else:
+      self._cb_compat_src = self.input
+    self._cb_show_compatibility(None)
 
-        bb,jj = np.where(links)
-        if len(bb):
-          for b,j in zip(bb,jj):
-            pb = self.pieces[b]
-            redgreen = lambda w: tuple(np.clip([0,512*w,512*(1-w)], 0, 255))
-            if weights is None:
-              pb.draw_side(img, j, green, offset=pb.offset, thickness=4)
-            else:
-              w = abs(weights[a,i,b,j])
-              pb.draw_side(img, j, redgreen(w), offset=pb.offset, thickness=3+int(4*w))
-        else:
-          continue
+    if block:
+      cv2.waitKey()
 
-        cv2.imshow('Compatibility', img)
-        cv2.waitKey()
+  def _cb_update_compat_trackbars ( self, ai ):
+    win = self._cb_compat_win
+    self._cb_compat_pause = True
+    cv2.setTrackbarPos('[a] piece', win, ai//4)
+    self._cb_compat_pause = False
+    cv2.setTrackbarPos('[i] side', win, ai%4)
 
-  def show_info ( self, block=True ):
+  def _cb_show_compatibility ( self, _ ):
+    if self._cb_compat_pause: return
+
+    src = self._cb_compat_src
+    mat = self._cb_compat_mat
+    win = self._cb_compat_win
+    wts = self._cb_compat_wts
+
+    a = cv2.getTrackbarPos('[a] piece', win)
+    i = cv2.getTrackbarPos('[i] side', win)
+    cv2.setTrackbarPos('a * i', win, 4*a+i)
+    pa = self.pieces[a]
+    l = mat[a,i]
+
+    img = src.copy()
+    pa.draw_side(img, i, blue, offset=pa.offset, thickness=8)
+    for b,j in zip(*np.where(l)):
+      pb = self.pieces[b]
+      if wts is None:
+        pb.draw_side(img, j, green, offset=pb.offset, thickness=4)
+      else:
+        w = abs(wts[a,i,b,j]) # TODO: altijd abs teruggeven
+        pb.draw_side(img, j, redgreen(w), offset=pb.offset, thickness=3+int(4*w))
+    cv2.imshow(win, img)
+
+  def show_info ( self, block=True, show=True ):
     img = np.repeat(32*self.mask.astype(np.uint8)[:,:,None], 3, 2)
-    for p in self.pieces:
-      p.show_info(img, block=block, view=False, offset=p.offset, stacked=False)
-    cv2.namedWindow('Puzzle Info', cv2.WINDOW_NORMAL)
-    cv2.imshow('Puzzle Info', img)
+    for i,p in enumerate(self.pieces):
+      p.show_info(img, block=block, view=False, offset=p.offset, stacked=False, id=i)
+    if show:
+      cv2.namedWindow('Puzzle Info', cv2.WINDOW_NORMAL)
+      cv2.imshow('Puzzle Info', img)
+    if block:
+      cv2.waitKey()
+    return img
 
-  def show_solution ( self, grid ):
-    print('-----------SHOW SOLUTION-------------')
-    # not following the opencv X,Y conventions
-    pcs = grid[:,:,0]
-    ori = grid[:,:,1]
+  def show_solution ( self, grid, m=1, block=True ):
+    # Determine piece size
+    w,h = self.pieces[int(grid[:,:,0][np.where(grid[:,:,1] == 0)][0])].sides[:2]
+    img = np.zeros((int(h*grid.shape[0]+m*(grid.shape[0]+1)), int(w*grid.shape[1]+m*(grid.shape[1]+1)), 3), dtype=np.uint8)
 
-    # Determine puzzle size
-    w,h = self.pieces[pcs[np.where(ori == 0)][0]].sides[:2]
-    img = np.zeros((int(np.rint(w*pcs.shape[0])), int(np.rint(h*pcs.shape[1])), 3), dtype=np.uint8)
-    # Draw pieces
     # TODO: niet omzetten naar int in super fn en werken met np.where(~isnan())
-    for x in range(grid.shape[0]):
-      for y in range(grid.shape[1]):
-        p = self.pieces[pcs[x,y]]
-        pts_from = p.corners[:3,0].astype(np.float32)
-        pts_to = arr([
-          [(x+1)*w,y*h],
-          [x*w,y*h],
-          [x*w,(y+1)*h]
-        ], dtype=np.float32)
-        print(pts_to.astype(int))
-        M_transform = cv2.getAffineTransform(pts_from, pts_to)
-        img_piece = cv2.warpAffine(p.input, M_transform, img.shape[:2])
-        print(img.shape)
-        print(img_piece.shape)
-        print(img.shape[:2])
-        try:
-          img += img_piece*(img_piece>0)
-        except:
-          img_piece = np.rot90(img_piece, 1, (0,1))
-          img += img_piece*(img_piece>0)
-        for pt in pts_to:
-          draw_cross(img, tuple(pt.astype(int)), 4, blue)
 
-    # SHOW LOLOLOL, spanneeend
+    # Draw pieces
+    for y,x in zip(*np.where(~np.isnan(grid[:,:,0]))):
+        #for y in range(grid.shape[0]):
+        #for x in range(grid.shape[1]):
+        p = self.pieces[int(grid[y,x,0])]
+
+        # Punten bepalen voor de rotatie
+        pts_from = np.roll(p.corners, int(-grid[y,x,1]), axis=0)[:3,0]#.astype(np.float32)
+        pts_to_org = [m+y*(h+m), img.shape[1]-(m+(x+1)*(w+m))] # HACK
+        pts_to_dst = [[h,0],[0,0],[0,w]]
+        pts_to = (arr(pts_to_org) + arr(pts_to_dst))
+
+        # Transformatie matrix bepalen
+        M_transform = cv2.getAffineTransform(np.float32(pts_from), np.float32(pts_to))
+        img_piece = cv2.warpAffine(p.input, M_transform, img.shape[:2])
+
+        # HACK ~ zal altijd werken
+        if np.equal(img.shape, img_piece.shape).all():
+          img += img_piece*(img_piece>0)
+        else:
+          img_piece = np.rot90(img_piece)
+          img += img_piece*(img_piece>0)
+
+    # Weergeven
     cv2.namedWindow('output', cv2.WINDOW_NORMAL)
     cv2.imshow('output', cv2.convertScaleAbs(img))
-    cv2.waitKey(0)
-
-
-    #M = cv2.getAffineTransform(pts1,pts2)
-    #dst = cv2.warpAffine(img,M,(cols,rows))
-
-
-    #raise Debug
+    if block:
+      cv2.waitKey(0)
 
   def show_color ( self, block=True, title='Puzzle [color]' ):
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)

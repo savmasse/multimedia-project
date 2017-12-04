@@ -30,15 +30,32 @@ class Grid:
     self.connections.fill(nan)
     self.find_compatible()
 
+
+  def print_stats ( self, goal=None ):
+    combinations = np.prod(self.matrix.shape[:2])
+    candidates = self.matrix.sum()
+    per_side = candidates/combinations
+    print('%i possible matches down to %.2f per side (%.2f%%)'  % (
+      combinations, per_side, 100*per_side/combinations
+    ), end=' ')
+
+    if goal is not None:
+      print('[%i/%i]' % (candidates,goal))
+    else:
+      print()
+
 ###############################################################################
 #                                  MATRIX                                     #
 ###############################################################################
 
   @property
+  def tot_n_candidates ( self ):
+    return self.n_compatible.sum()
+
+  @property
   def finished ( self ):
-    # TODO: param recalculate?
-    self.find_compatible() # WRS NUTTELOZE OVERHEAD
-    return self.n_compatible.sum() == 0
+    #self.find_compatible()
+    return self.tot_n_candidates == 0
 
   def find_compatible ( self ):
     self.n_compatible = self.matrix.sum((2,3))
@@ -53,42 +70,67 @@ class Grid:
     return # TODO
     raise Unsolvable
 
+  def apply_weights ( self, weights, key='best_weight', pre_shrink=True ):
+    """
+    KEYS:
+      best_weight      => max weight
+      least_candidates => minste kandidaten -> max weight
+      neighbours       => minste neighbours -> max sum weight/#edges  # TODO, WRS ENORM NUTTIG, niet makkelijk
+      mergers          => combineren islands                          # enkel in dromenland
+    """
+
+    if pre_shrink:
+      self.shrink()
+
+    if key == 'best_weight':
+      while not self.finished:
+        self.connect(*self.qry_best_weight(weights))
+    elif key == 'least_candidates':
+      while not self.finished:
+        self.connect(*self.qry_least_candidates(weights))
+    else:
+      raise Exception('apply_weights(key=\'%s\') bestaat niet' % key)
+
+  def qry_least_candidates ( self, weights ):
+    # Filter op zijden met het minst aantal compatibele zijden
+    lc = np.where(self.n_compatible == self.n_compatible[self.n_compatible != 0].min()) # 0 negeren via underflow
+    #print('lc', lc)
+    wlc = weights[lc]
+    #print('wlc', wlc)
+    ilc, b,j = np.unravel_index(np.nanargmax(wlc), wlc.shape) # HINT: bij wijziging van gewichten nanargmax bekijken!
+    a, i = lc[0][ilc], lc[1][ilc]
+    return a,i, b,j
+
+  def qry_best_weight ( self, weights ):
+    wm = np.where(self.matrix)
+    wt = weights[self.matrix]
+    i = np.nanargmax(wt)
+    return wm[0][i], wm[1][i], wm[2][i], wm[3][i]
+
 ###############################################################################
 #                                  CONNECT                                    #
 ###############################################################################
 
   def shrink ( self ):
+    # TODO: compatibiliteit van connected stukken mergen (:( steunt op islands))
+
     while self.perfect.any():
       for a,i in zip(*np.where(self.perfect)):
         for b,j in zip(*np.where(self.matrix[a,i])): # 1 coord => max 1 iter
           #print('%i,%i %i,%i' % (a,i,b,j))
           self.connect(a,i,b,j, _update_cache=False)
-      self.find_perfect()
+      self.find_compatible()
 
   def connect ( self, a, i, b, j, _update_cache=True ):
     self.connections[a,i] = [b,j]
     self.connections[b,j] = [a,i]
-
-    # Remove connection and competitors for this target
-    # > remove competitors
-    for c,k in zip(*np.where(self.matrix[a,i])):
-      self.matrix[c,k,a,i] = False
-      self.n_compatible[c,k] -= 1
-    for c,k in zip(*np.where(self.matrix[b,j])):
-      self.matrix[c,k,b,j] = False
-      self.n_compatible[c,k] -= 1
-    # > remove base
     self.matrix[a,i] = False
-    self.n_compatible[a,i] = 0
-    # > remove mirror
     self.matrix[b,j] = False
-    self.n_compatible[b,j] = 0
+    self.matrix[:,:,a,i] = False
+    self.matrix[:,:,b,j] = False
 
     if _update_cache:
-      self.find_perfect()
-
-  def apply_weights ( self, weights ):
-    print('TODO: werken met gewichten')
+      self.find_compatible()
 
 ###############################################################################
 #                                   BUILD                                     #
@@ -96,18 +138,15 @@ class Grid:
 
   def build ( self, a=None, grid=None, connections=None ):
     connections = connections or self.connections.copy()
-    a = a or np.isnan(self.connections[:,:,0]).sum(axis=1).argmin() # best verbonden punt
+
+    # Begin vanuit het punt met het grootste aantal kandidaat-buren
+    a = a or np.isnan(self.connections[:,:,0]).sum(axis=1).argmax()
+
     grid =  grid or arr([[[a,0]]], dtype=float) # float ondersteunt NaN
 
-    print(connections)
-    print('building...')
-    grid = add_to_grid(a, grid, connections)
-    print('built')
+    return add_to_grid(a, grid, connections) # recursief
 
-    return grid.astype(np.int)
-    # TODO: bouwen tot er geen island overblijft
-
-def add_to_grid ( a, grid, connections ): # RECURSIEF
+def add_to_grid ( a, grid, connections ): # RECURSIEF; STABIEL :D
   # TODO: is tip_i wel op side_i?
 
   # Locate piece A
@@ -115,11 +154,12 @@ def add_to_grid ( a, grid, connections ): # RECURSIEF
   try: # TODO: fix?
     ori_a = int(grid[(*loc_a, 1)])                  # orientation of A in the puzzle coord system
   except:
-    raise Unsolvable('Same piece is placed twice in the puzzle')
+    # TODO: is waarschijnlijk niet de juiste uitleg
+    raise Unsolvable('Same piece is placed twice in the puzzle, correct size = %i/%i' % (np.isnan(grid).sum()-1, connections.shape[0]), data=grid)
 
   # Place all neighbours
-  print('connections:')
-  print(connections[a])
+  #print('connections:')
+  #print(connections[a])
   for i, (b,j) in enumerate(connections[a]):
     if not np.isnan([b,j]).all():
       b,j = int(b),int(j)
@@ -145,8 +185,8 @@ def add_to_grid ( a, grid, connections ): # RECURSIEF
     grid[(*loc_b,)] = [b,ori_b]
 
     # TODO:remove placed from connections (! mirrorred)
-    print('-'*10)
-    print(grid[:,:,0])
+    #print('-'*10)
+    #print(grid[:,:,0])
 
   # TODO: kan dit bij in de vorige loop?
   for i, (b,j) in enumerate(connections[a]):
