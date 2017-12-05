@@ -350,21 +350,23 @@ class Puzzle:
                   cv2.compareHist(a_edge_hist, b_edge_hist, method)
 
     # TODO: output omzetten naar correcte waarden
-    matrix = np.abs(matrix) # TODO: willekeurig gedaan! check of dit wel nodig is
-
-
-    return matrix
+    if method == cv2.HISTCMP_CORREL:
+      return np.abs(matrix)
+    elif method == cv2.HISTCMP_CHISQR or method == cv2.HISTCMP_BHATTACHARYYA or method == cv2.HISTCMP_CHISQR_ALT or method == cv2.HISTCMP_KL_DIV:
+      return np.nanmax(matrix)-matrix
+    elif method == cv2.HISTCMP_INTERSECT:
+      return matrix
+    else:
+      raise Exception('cv2.compareHist(method=%i) wordt niet ondersteund' % method)
 
   def solve ( self, print_stats=True, radius=5, methods=[('histcmp', cv2.HISTCMP_CORREL, 'best_weight')], show_failure=False ):
-
-    print('METHODS=', methods)
-
     M_compatible = self.compatibility_matrix()
     grid = Grid(M_compatible)
 
+    """ # zet mij terug aan, was tijdens debuggin. (non-breaking)
     with Grid_solution_stats(grid, 'shrink', print_stats):
       grid.shrink()
-
+    """
     for method, param, key in methods:
       if not grid.finished:
         with Grid_solution_stats(grid, '%s(%s)' % (method,param), print_stats):
@@ -459,8 +461,6 @@ class Puzzle:
     # Determine piece size
     w,h = self.pieces[int(grid[:,:,0][np.where(grid[:,:,1] == 0)][0])].sides[:2]
     img = np.zeros((int(h*grid.shape[0]+m*(grid.shape[0]+1)), int(w*grid.shape[1]+m*(grid.shape[1]+1)), 3), dtype=np.uint8)
-
-    # TODO: niet omzetten naar int in super fn en werken met np.where(~isnan())
 
     # Draw pieces
     for y,x in zip(*np.where(~np.isnan(grid[:,:,0]))):

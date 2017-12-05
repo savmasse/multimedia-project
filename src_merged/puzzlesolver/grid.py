@@ -97,7 +97,7 @@ class Grid:
     #print('lc', lc)
     wlc = weights[lc]
     #print('wlc', wlc)
-    ilc, b,j = np.unravel_index(np.nanargmax(wlc), wlc.shape) # HINT: bij wijziging van gewichten nanargmax bekijken!
+    ilc, b,j = np.unravel_index(np.nanargmax(wlc), wlc.shape)
     a, i = lc[0][ilc], lc[1][ilc]
     return a,i, b,j
 

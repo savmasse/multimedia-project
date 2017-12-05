@@ -9,21 +9,29 @@ from puzzlesolver.exception import Debug
 from snippets import Time, Count
 
 ###############################################################################
+""" Copy & Paste bord
+HISTCMP_CORREL
+HISTCMP_INTERSECT
+HISTCMP_CHISQR
+HISTCMP_CHISQR_ALT
+HISTCMP_BHATTACHARYYA
+HISTCMP_KL_DIV
+"""
 
 graph = False
 filt = {
-  'shape' : "j",
-  'size'  : "5",
-  'order' : "sc",
+  'shape' : "",
+  'size'  : "",
+  'order' : "",
   'n'     : ""
 }
 blocking = {
-  'show_success': True,
+  'show_success': False,
   'show_failure': False
 }
 params = {
   #'methods': [], # enkel shrinken
-  'methods': [('histcmp', cv2.HISTCMP_CORREL, 'best_weight')],
+  'methods': [('histcmp', cv2.HISTCMP_CORREL , 'best_weight')],
 }
 
 ###############################################################################
@@ -40,26 +48,30 @@ def execute ( shape, size, order, n, methods, show_failure=True, show_success=Tr
     # Overloop de gekozen puzzels
     for path in paths:
       try:
-        msg = '   '
+        try:
+          msg = '   '
 
-        puzzle = Puzzle(path)
+          puzzle = Puzzle(path)
 
-        with Time('Piece extraction'):
-          puzzle.extract_pieces()
+          with Time('Piece extraction'):
+            puzzle.extract_pieces()
 
-        with Time('Solution'):
-          if show_failure:
-            grid = puzzle.solve(radius=2, methods=methods, show_failure=exec_timer)
-          else:
-            grid = puzzle.solve(radius=2, methods=methods)
-          if grid is not False:
-            n_solved.count()
+          with Time('Solution'):
+            if show_failure:
+              grid = puzzle.solve(radius=2, methods=methods, show_failure=exec_timer)
+            else:
+              grid = puzzle.solve(radius=2, methods=methods)
+            if grid is not False:
+              n_solved.count()
 
-        with exec_timer.pause():
-          if show_success:
-            puzzle.show_color(block=False)
-            puzzle.show_solution(grid)
-            #puzzle.show_compatibility(puzzle.compatibility_matrix(), weights=puzzle.histogram_correlation_matrix())
+          with exec_timer.pause():
+            if show_success:
+              puzzle.show_color(block=False)
+              puzzle.show_solution(grid)
+              #puzzle.show_compatibility(puzzle.compatibility_matrix(), weights=puzzle.histogram_correlation_matrix())
+        except Exception as exception:
+          raise exception
+          pass
 
       except Unsolvable as exc:
         msg = 'EXC'
