@@ -172,7 +172,6 @@ class Puzzle:
         max(reversed(ratio_caught_x), key=lambda nr: nr[1])[0]
       )
     except:
-
       if not len(ratio_caught_x):
         print('Geen verticale segment scheidingslijnen kunnen matchen')
         print('Kandidaten:', ', '.join(str(a) for a in arm_x))
@@ -363,10 +362,9 @@ class Puzzle:
     M_compatible = self.compatibility_matrix()
     grid = Grid(M_compatible)
 
-    """ # zet mij terug aan, was tijdens debuggin. (non-breaking)
     with Grid_solution_stats(grid, 'shrink', print_stats):
       grid.shrink()
-    """
+
     for method, param, key in methods:
       if not grid.finished:
         with Grid_solution_stats(grid, '%s(%s)' % (method,param), print_stats):

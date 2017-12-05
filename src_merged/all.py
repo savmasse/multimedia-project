@@ -20,7 +20,7 @@ HISTCMP_KL_DIV
 
 graph = False
 filt = {
-  'shape' : "",
+  'shape' : "jig",
   'size'  : "",
   'order' : "",
   'n'     : ""
@@ -31,7 +31,7 @@ blocking = {
 }
 params = {
   #'methods': [], # enkel shrinken
-  'methods': [('histcmp', cv2.HISTCMP_CORREL , 'best_weight')],
+  'methods': [('histcmp', cv2.HISTCMP_BHATTACHARYYA , 'best_weight')],
 }
 
 ###############################################################################
