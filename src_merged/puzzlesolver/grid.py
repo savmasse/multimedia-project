@@ -1,9 +1,41 @@
 # -*- coding: utf-8 -*-
 
+################################################################################
+"""
+Tekortkomingen: vooral vanwege de optimalisatie naar jigsaws
+(er zullen er wel meer zijn)
+
+• Grid:shrink() gaat ervan uit dat ELKE zijde van een puzzelstuk een buur
+   heeft, en zal dit steeds verbinden. Wanneer dit gebeurt over een rand heen
+   - d.w.z. wanneer interne stukken minder goed matchen met elkaar dan de
+     rand met overflowende puzzelstukken - zal het algoritme mogelijk correcte
+   verbindingen elimineren van de adjacency matrix door optimalisatie rond het
+   foutief verbonden puzzelstuk. Bij jigsaws zijn verbindingen overheen de rand
+   onmogelijk omdat de randzijden (= allen vlak) uit de adjacency matrix worden
+   verwijderd.
+
+   ⇒ Zorg ervoor dat gewichten van foute matches steeds onder die van goede
+     matches ligt. Dit is onmogelijk op voorhand te voorspellen, dus het algo
+     kan aangepast worden door puzzelstukken meteen voor een volledige rand uit
+     te breiden.
+
+• Bij het verbinden van puzzelstukken wordt geen rekening gehouden met het
+   eiland van verbonden puzzelstukken. Dit kan opgelost worden door een lijst
+   van onafgewerkte eilandjes bij te houden parallel met de vorming van de
+   lijst van werkelijk verbonden puzzelstukken
+
+• Er wordt geen rekening gehouden met de grootte van de puzzel (5x5/2x3/...).
+"""
+################################################################################
+
 from .exception import Unsolvable, Debug
 
 import numpy as np
 from numpy import array as arr, nan
+
+################################################################################
+# CONSTANTEN                                                                   #
+################################################################################
 
 DIR = [
   [ 0, 1],
@@ -19,18 +51,35 @@ PAD = [
   ((0,1), (0,0), (0,0))
 ]
 
-class Grid:
+################################################################################
+"""
+Deze klasse voorziet oplossingsalgoritmen om het masker van mogelijke
+verbindingen tussen puzzelstukken te minimaliseren tot een lijst van werkelijk
+verbonden puzzelstukken. Vervolgens kan deze lijst gebruikt worden om een 2D
+grid mee te genereren.
 
+Voor een 5x5 puzzel van 25 stukken met elk vier randen geldt:
+
+Grid().matrix.shape      == [bool] (25,4,25,4)
+Grid().connections.shape == [int]  (25,4)
+"""
+class Grid: #                                                    2D Puzzelgrid
+################################################################################
+
+  # Sla de adjacency matrix op en voorzie lege oplossingscontainers die door
+  #  de klassemethoden kruisgewijs gelezen en beschreven worden
   def __init__ ( self, matrix ):
     assert(matrix.dtype==np.bool)
-    self.matrix = matrix  # bevat geen NaN's
-    self.grid = None      # bevat wel NaN's
-    self.find_compatible()
+    self.matrix = matrix.copy()  # Adjacency matrix
     self.connections = np.empty((matrix.shape[0], 4, 2))
     self.connections.fill(nan)
     self.find_compatible()
 
+#----------------------------------------------------------------------- Logging
 
+  # TODO: onduidelijke informatie
+
+  # Geef informatie over voor de huidige voortgang in het vormen van een grid
   def print_stats ( self, goal=None ):
     combinations = np.prod(self.matrix.shape[:2])
     candidates = self.matrix.sum()
@@ -44,9 +93,7 @@ class Grid:
     else:
       print()
 
-###############################################################################
-#                                  MATRIX                                     #
-###############################################################################
+#-------------------------------------------------------------- Adjacency matrix
 
   @property
   def tot_n_candidates ( self ):
@@ -62,15 +109,11 @@ class Grid:
     self.find_perfect()
     return self.n_compatible
 
-  def find_perfect ( self ):
+  def find_perfect ( self ): # [!] niet perfect, want soms is 0 verbindingen ideaal
     self.perfect = self.n_compatible == 1
     return self.perfect
 
-  def test ( self ):
-    return # TODO
-    raise Unsolvable
-
-  def apply_weights ( self, weights, key='best_weight', pre_shrink=True ):
+  def solve_weights ( self, weights, key='best_weight', pre_shrink=True ):
     """
     KEYS:
       best_weight      => max weight
@@ -85,9 +128,31 @@ class Grid:
     if key == 'best_weight':
       while not self.finished:
         self.connect(*self.qry_best_weight(weights))
+        #self.shrink() GAF SLECHTER RESULTAAT?
     elif key == 'least_candidates':
       while not self.finished:
         self.connect(*self.qry_least_candidates(weights))
+        self.shrink()
+    elif key == 'expand_border_as_group':
+      """
+      wts = weights
+      for a in range(5):
+        for i in range(4):
+          try:
+            b,j = np.unravel_index(np.nanargmax(wts[a,(i+1)%4]), (25,4))
+            c,k = np.unravel_index(np.nanargmax(wts[b,(j+1)%4]), (25,4))
+            d,l = np.unravel_index(np.nanargmax(wts[c,(k+1)%4]), (25,4))
+            e,m = np.unravel_index(np.nanargmax(wts[d,(l+1)%4]), (25,4))
+            if e == a and m == i:
+              self.connect(a,(i+1)%4, b,j)
+              self.connect(b,(j+1)%4, c,k)
+              self.connect(c,(k+1)%4, d,l)
+              self.connect(d,(l+1)%4, a,i)
+          except:
+            continue
+        break
+      """
+      raise Debug('TODO: implementeer expand_border_as_group')
     else:
       raise Exception('apply_weights(key=\'%s\') bestaat niet' % key)
 
@@ -107,34 +172,34 @@ class Grid:
     i = np.nanargmax(wt)
     return wm[0][i], wm[1][i], wm[2][i], wm[3][i]
 
-###############################################################################
-#                                  CONNECT                                    #
-###############################################################################
+#------------------------------------------------------------------ Verbindingen
 
   def shrink ( self ):
-    # TODO: compatibiliteit van connected stukken mergen (:( steunt op islands))
-
     while self.perfect.any():
       for a,i in zip(*np.where(self.perfect)):
         for b,j in zip(*np.where(self.matrix[a,i])): # 1 coord => max 1 iter
-          #print('%i,%i %i,%i' % (a,i,b,j))
           self.connect(a,i,b,j, _update_cache=False)
       self.find_compatible()
 
   def connect ( self, a, i, b, j, _update_cache=True ):
+    # Verbinding opslaan
     self.connections[a,i] = [b,j]
     self.connections[b,j] = [a,i]
+
+    # Alle andere verbindingen tot deze zijden wegschrappen
     self.matrix[a,i] = False
     self.matrix[b,j] = False
     self.matrix[:,:,a,i] = False
     self.matrix[:,:,b,j] = False
 
+    # TODO: compatibiliteit van connected stukken mergen (steunt op islands)
+
+    # Steeds nodig, tenzij meerdere connecties tegelijkertijd worden
+    # > ook daarna moet de cache vernieuwd worden
     if _update_cache:
       self.find_compatible()
 
-###############################################################################
-#                                   BUILD                                     #
-###############################################################################
+#--------------------------------------------------------------- Oplossingsgraaf
 
   def build ( self, a=None, grid=None, connections=None ):
     connections = connections or self.connections.copy()
@@ -146,8 +211,10 @@ class Grid:
 
     return add_to_grid(a, grid, connections) # recursief
 
-def add_to_grid ( a, grid, connections ): # RECURSIEF; STABIEL :D
-  # TODO: is tip_i wel op side_i?
+
+################################################################################
+def add_to_grid ( a, grid, connections ):
+################################################################################
 
   # Locate piece A
   loc_a = arr(np.where(grid[:,:,0] == a)).squeeze().T   # x,y (or first piece: x) of piece A

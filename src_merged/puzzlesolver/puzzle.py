@@ -38,10 +38,12 @@ class Puzzle:
     self.mask = self.gray != 0
     self.contours = [cnt for cnt in cv2.findContours(np.uint8(self.mask), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[1] if cv2.contourArea(cnt) > 100]
 
-    # OPGELET! verwijderde contours bij zwevende jigsaw particles
+    # OPGELET: zwevende particles (<100px oppervlakte) zijn verwijderd!
     # MAAR: niet oplossen door met morphologyex fill, of self.contours produceert
-    #       fouten
-    # DUS: bounding box van contour meepakken en later opnieuw contouren berekenen?
+    #        fouten welke het oplossen van jigsaws in de war stuurt bij
+    #        particlesrondom jigsaw Tips
+    # OPLOSSING: particles worden meegenomen in het Piece.mask, maar niet in de
+    #             Piece.contour.
 
     self.tile = None      # TRUE/FALSE
     self.shape = None     # (x,y)
@@ -79,6 +81,7 @@ class Puzzle:
       #   6+  = jigsaw heeft af en toe meer dan 4 hoeken
       polygons = [cv2.approxPolyDP(contour, 4, True) for contour in self.contours]
       if not (self.extract_tiles(polygons) or self.extract_jigsaws(polygons)):
+        raise Debug
         raise Unsolvable('Failed to extract pieces')
       else:
         self.check_scrambled()
@@ -131,8 +134,6 @@ class Puzzle:
       if len(possibles) < 4:
         return False # gebeurt niet tenzij wijzigingen aan parameters
 
-      # HINT: kan ook via np.argsort()
-
       # Hersorteren volgens tegenwijzerszin
       idx = sorted([i for i,sp in possibles[:4]])
 
@@ -152,6 +153,7 @@ class Puzzle:
     return True
 
   def segment_tiles ( self ):
+    """ Aaneengesloten tegels extractie via edge detectie """
     img = self.gray[1:-1,1:-1].astype(np.int16)
     dx = cv2.convertScaleAbs(np.diff(img, axis=1)).sum(axis=0)
     dy = cv2.convertScaleAbs(np.diff(img, axis=0)).sum(axis=1)
@@ -167,6 +169,27 @@ class Puzzle:
     ratio_caught_y = [(n,r) for n,r in [(n,sum([1 for y in arm_y if y%p==0])/(n-1)) for n,p in possible_heights] if r>0]
 
     try:
+      """
+      from matplotlib import pyplot as plt
+      plt.figure(figsize=(20,10))
+      plt.subplot(2,2,1)
+      plt.title('Som van afgeleiden langs de horizontale as')
+      plt.xlabel('Positie (verticaal)')
+      plt.plot(dx[1:-1])
+      plt.scatter(arm_x-2, dx[arm_x-1], color='red')
+      plt.subplot(2,2,2)
+      plt.imshow(cv2.convertScaleAbs(np.diff(img, axis=0)))
+      plt.subplot(2,2,3)
+      plt.title('Som van afgeleiden langs de verticale as')
+      plt.xlabel('Positie (horizontaal)')
+      plt.plot(dy[1:-1])
+      plt.scatter(arm_y-2, dy[arm_y-1], color='red')
+      plt.subplot(2,2,4)
+      plt.imshow(cv2.convertScaleAbs(np.diff(img, axis=1)))
+      plt.show(block=True)
+      cv2.destroyAllWindows()
+      """
+
       self.shape = (
         max(reversed(ratio_caught_y), key=lambda nr: nr[1])[0],
         max(reversed(ratio_caught_x), key=lambda nr: nr[1])[0]
@@ -185,23 +208,8 @@ class Puzzle:
       else:
         print('Langs de horizontale as:', ', '.join('{%i → %.2f}' % nr for nr in ratio_caught_y))
 
-      """
-      cv2.imshow('segment_tiles(): geen matches', self.input)
-      cv2.waitKey(10)
-      from matplotlib import pyplot as plt
-      plt.figure(figsize=(20,10))
-      plt.subplot(2,1,1)
-      plt.plot(dx[1:-1])
-      plt.scatter(arm_x-2, dx[arm_x], color='red')
-      plt.subplot(2,1,2)
-      plt.plot(dy[1:-1])
-      plt.scatter(arm_y-2, dy[arm_y], color='red')
-      plt.show(block=True)
-      cv2.destroyAllWindows()
-      """
-      raise Unsolvable('Verdeling in segmenten is mislukt')
-
       # TODO: code Sam oproepen uit extern bestand
+      raise Unsolvable('Verdeling in segmenten is mislukt; TODO: Sam\'s methode automatisch oproepen')
 
     # Puzzelstukken genereren
     h,w = [img.shape[i]/self.shape[i] for i in range(2)]
@@ -226,6 +234,7 @@ class Puzzle:
         break
 
   def check_size ( self ):
+    """ Bepaal de afmetingen (rechthoekig/vierkant) en hou ze bij """
     vecs = np.diff(np.pad([piece.corners for piece in self.pieces], ((0,0),(0,1),(0,0),(0,0)), 'wrap'), axis=1).squeeze()
     lens = np.hypot(vecs[:,:,0], vecs[:,:,1])
 
@@ -249,6 +258,8 @@ class Puzzle:
 
 
   def compatibility_matrix ( self ):
+    """ Booleaanse adjacency matrix genereren dat dient als eliminatie masker """
+
     # Genereer volledig toegelaten output matrix
     n = len(self.pieces)
     matrix = np.ones((n,4, n,4), dtype=bool)
@@ -264,7 +275,7 @@ class Puzzle:
 
     for a, pa in enumerate(self.pieces):
       for b, pb in enumerate(self.pieces):
-        # TODO: diagonaal vullen en mirrorren
+        # TODO: deze oplossingen worden dubbel uitgevoerd => diagonaal spiegelen
 
         mat = matrix[a,:,b,:]
         # Zijden moeten even lang zijn
@@ -274,8 +285,6 @@ class Puzzle:
 
         # Jigsaw
         if pa.tips and pb.tips:
-          # TODO: zo veel mogelijk logica mergen
-
           # Beide zijden moeten een Tip hebben
           # > verwijdert platte zijden en incompatibele Tips
           # [+ versnelt uitvoering]
@@ -333,7 +342,6 @@ class Puzzle:
     matrix.fill(np.nan) # controleer of enkel de diagonaal achteraf NaN blijft
 
     # Vul matrix met correlatie van histogrammen
-    # TODO: support voor andere cv2.HISTCMP_ algoritmen
     if mask is not None:
       where = np.where(mask)
       for a,i,b,j in zip(*where):
@@ -348,7 +356,6 @@ class Puzzle:
                 matrix[a,i,b,j] = matrix[a,i,b,j] = \
                   cv2.compareHist(a_edge_hist, b_edge_hist, method)
 
-    # TODO: output omzetten naar correcte waarden
     if method == cv2.HISTCMP_CORREL:
       return np.abs(matrix)
     elif method == cv2.HISTCMP_CHISQR or method == cv2.HISTCMP_BHATTACHARYYA or method == cv2.HISTCMP_CHISQR_ALT or method == cv2.HISTCMP_KL_DIV:
@@ -359,6 +366,7 @@ class Puzzle:
       raise Exception('cv2.compareHist(method=%i) wordt niet ondersteund' % method)
 
   def solve ( self, print_stats=True, radius=5, methods=[('histcmp', cv2.HISTCMP_CORREL, 'best_weight')], show_failure=False ):
+    """ Compatibiliteitsmatrix oplossen met gewichten naar een 2D puzzelgrid """
     M_compatible = self.compatibility_matrix()
     grid = Grid(M_compatible)
 
@@ -370,7 +378,7 @@ class Puzzle:
         with Grid_solution_stats(grid, '%s(%s)' % (method,param), print_stats):
           if method == 'histcmp':
             M_histograms = self.histogram_correlation_matrix(mask=M_compatible, radius=radius, method=param) # TODO: gebruik M_compatible masker
-            grid.apply_weights(M_histograms, key=key)
+            grid.solve_weights(M_histograms, key=key)
           grid.shrink()
 
     if print_stats:
@@ -394,6 +402,7 @@ class Puzzle:
       return False
 
   def show_compatibility ( self, matrix, weights=None, abstract=True, title='Compatibility', block=True ):
+    """ Visueel weergeven van de compatibiliteitsmatrix, eventueel met kleurgecodeerde gewichten """
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
     cv2.createTrackbar('a * i', title, 0, len(self.pieces)*4-1, self._cb_update_compat_trackbars)
     cv2.createTrackbar('[a] piece', title, 0, len(self.pieces)-1, self._cb_show_compatibility)
@@ -413,6 +422,7 @@ class Puzzle:
       cv2.waitKey()
 
   def _cb_update_compat_trackbars ( self, ai ):
+    """ Callback functie van self.show_compatibility """
     win = self._cb_compat_win
     self._cb_compat_pause = True
     cv2.setTrackbarPos('[a] piece', win, ai//4)
@@ -420,6 +430,7 @@ class Puzzle:
     cv2.setTrackbarPos('[i] side', win, ai%4)
 
   def _cb_show_compatibility ( self, _ ):
+    """ Callback functie van self.show_compatibility """
     if self._cb_compat_pause: return
 
     src = self._cb_compat_src
@@ -445,6 +456,7 @@ class Puzzle:
     cv2.imshow(win, img)
 
   def show_info ( self, block=True, show=True ):
+    """" Puzzelstuk informatie uit Piece.show_info() gecombineerd weergeven """
     img = np.repeat(32*self.mask.astype(np.uint8)[:,:,None], 3, 2)
     for i,p in enumerate(self.pieces):
       p.show_info(img, block=block, view=False, offset=p.offset, stacked=False, id=i)
@@ -456,6 +468,7 @@ class Puzzle:
     return img
 
   def show_solution ( self, grid, m=1, block=True ):
+    """ Opgeloste puzzel weergeven """
     # Determine piece size
     w,h = self.pieces[int(grid[:,:,0][np.where(grid[:,:,1] == 0)][0])].sides[:2]
     img = np.zeros((int(h*grid.shape[0]+m*(grid.shape[0]+1)), int(w*grid.shape[1]+m*(grid.shape[1]+1)), 3), dtype=np.uint8)
@@ -490,24 +503,28 @@ class Puzzle:
       cv2.waitKey(0)
 
   def show_color ( self, block=True, title='Puzzle [color]' ):
+    """ Kleurweergave van de input """
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
     cv2.imshow(title, self.input)
     if block:
       cv2.waitKey()
 
   def show_mask ( self, block=True, title='Puzzle [mask]' ):
+    """" Maskerweergave van de input """
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
     cv2.imshow(title, self.mask)
     if block:
       cv2.waitKey()
 
   def show_gray ( self, block=True, title='Puzzle [gray]' ):
+    """" Grijswaardenweergave van de input """
     cv2.namedWindow(title, cv2.WINDOW_NORMAL)
     cv2.imshow(title, self.gray)
     if block:
       cv2.waitKey()
 
   def correct ( self, path ):
+    """ Geeft een string mee die onafhankelijk controleert of de puzzeldetectie correcte resulaten geeft (grondwaarheid in afbeeldingspath) """
     return ' '.join([
       '◌' if self.tile is None else '●' if (self.tile and 'tile' in path or (not self.tile) and 'jigsaw' in path) else '◯',
       '◌' if self.shape is None else '●' if ('%ix%i' % self.shape) in path else '◯',

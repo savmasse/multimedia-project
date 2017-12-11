@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
 
+"""
+Een puzzle picker window
+- random afbeelding (na filter)
+- gekozen afbeelding
+"""
+
 import tkinter as tk
 import glob
 from random import choice as random_from
@@ -20,27 +26,31 @@ class Picker:
     self.shuffled  = self.IntVar('shuffled')
     self.rotated   = self.IntVar('rotated')
     self.scrambled = self.IntVar('scrambled')
-    self.x2 = self.IntVar('2x2')
-    self.x3 = self.IntVar('3x3')
-    self.x4 = self.IntVar('4x4')
-    self.x5 = self.IntVar('5x5')
+    self.x2  = self.IntVar('2x2')
+    self.x3  = self.IntVar('3x3')
+    self.x4  = self.IntVar('4x4')
+    self.x5  = self.IntVar('5x5')
+    self.x23 = self.IntVar('2x3')
     self.choice = tk.StringVar(self.win)
 
     # Populate TKinter UI
     tk.Checkbutton(self.win, text="2x2", variable=self.x2, command=self.update_dropdown).grid(row=1,column=0)
-    tk.Checkbutton(self.win, text="3x3", variable=self.x3, command=self.update_dropdown).grid(row=2,column=0)
-    tk.Checkbutton(self.win, text="4x4", variable=self.x4, command=self.update_dropdown).grid(row=3,column=0)
-    tk.Checkbutton(self.win, text="5x5", variable=self.x5, command=self.update_dropdown).grid(row=4,column=0)
+    tk.Checkbutton(self.win, text="2x3", variable=self.x23, command=self.update_dropdown).grid(row=2,column=0)
+    tk.Checkbutton(self.win, text="3x3", variable=self.x3, command=self.update_dropdown).grid(row=3,column=0)
+    tk.Checkbutton(self.win, text="4x4", variable=self.x4, command=self.update_dropdown).grid(row=4,column=0)
+    tk.Checkbutton(self.win, text="5x5", variable=self.x5, command=self.update_dropdown).grid(row=5,column=0)
     tk.Checkbutton(self.win, text="Shuffled",  variable=self.shuffled,  command=self.update_dropdown).grid(row=1,column=1)
     tk.Checkbutton(self.win, text="Rotated",   variable=self.rotated,   command=self.update_dropdown).grid(row=2,column=1)
     tk.Checkbutton(self.win, text="Scrambled", variable=self.scrambled, command=self.update_dropdown).grid(row=3,column=1)
     tk.Checkbutton(self.win, text="Tiles",  variable=self.tiles,  command=self.update_dropdown).grid(row=1,column=2)
     tk.Checkbutton(self.win, text="Jigsaw", variable=self.jigsaw, command=self.update_dropdown).grid(row=2,column=2)
     self.button_pick = tk.Button(self.win, text="Pick", command=self.take)
-    self.button_pick.grid(row=5,column=0)
+    self.button_pick.grid(row=6,column=0)
     self.button_random = tk.Button(self.win, text="Random", command=self.take_random) # TODO: take random
-    self.button_random.grid(row=5,column=2)
-    self.button_random.focus_set()
+    self.button_random.grid(row=6,column=1)
+    self.button_selection = tk.Button(self.win, text="Collection", command=self.take_selection)
+    self.button_selection.grid(row=6,column=2)
+    self.button_selection.focus_set()
 
     # Show UI
     self.update_dropdown()
@@ -65,6 +75,7 @@ class Picker:
     if self.x3.get(): sizes.append('3x3')
     if self.x4.get(): sizes.append('4x4')
     if self.x5.get(): sizes.append('5x5')
+    if self.x23.get(): sizes.append('2x3')
     self.paths = sorted([ path
       for type in puzzleTypes
       for order in orders
@@ -84,9 +95,16 @@ class Picker:
       self.button_random['state'] = tk.DISABLED
 
   def take ( self ):
+    print('choice:', [self.choice.get()])
     self.win.destroy()
-    self.cb(self.choice.get())
+    self.cb([self.choice.get()])
 
   def take_random ( self ):
+    print('random:', [random_from(self.paths)])
     self.win.destroy()
-    self.cb(random_from(self.paths))
+    self.cb([random_from(self.paths)])
+
+  def take_selection ( self ):
+    print('selection:', self.paths)
+    self.win.destroy()
+    self.cb(self.paths)

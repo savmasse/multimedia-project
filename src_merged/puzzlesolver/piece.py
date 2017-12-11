@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 
-###############################################################################
+################################################################################
 
 blue  = (255,0,0)
 green = (0,255,0)
 red   = (0,0,255)
 
-###############################################################################
+################################################################################
 
 from .exception import Unsolvable
 from snippets   import draw_cross, show, seg_intersect
@@ -16,10 +16,15 @@ import numpy as np
 from numpy import array as arr
 from matplotlib import pyplot as plt
 
+################################################################################
 class Piece:
+################################################################################
+
 
   def __init__ ( self ):
     pass
+
+#--------------------------------------------------------------- Input verwerken
 
   def from_contour ( self, img_puzzle, img_puzzle_gray, contour, corners, jigsaw=False ):
     xmin,ymin = offset = contour.min(axis=0).squeeze()
@@ -56,6 +61,8 @@ class Piece:
     self.tips = False
 
     return self # voor generator expressies
+
+#--------------------------------------------------------- Eigenschappen bepalen
 
   def edge_neighbours_mask ( self, side, radius ):
     mask = np.zeros_like(self.mask)
@@ -114,8 +121,8 @@ class Piece:
         arcx = arc[:,0]
         arcy = arc[:,1]
         ox,oy = o  = ([1,-1]*s[::-1]*(d_top+10)/ds).astype(np.int) # orthogonaal
-        cx,cy = c = top + o
-        dx,dy = d = top - o
+        cx,cy = top + o
+        dx,dy = top - o
         signed_dists_ortho = ((oy*arcx - ox*arcy) + (dx*cy-dy*cx))/np.hypot(ox,oy)
         dists_ortho = np.abs(signed_dists_ortho)
         # > determine left or right based on manhattan distance to first corner
@@ -159,6 +166,7 @@ class Piece:
       self.tips = False
       raise Unsolvable('Jigsaw zonder tips')
 
+#--------------------------------------------------------------------- Weergeven
 
   def show_color ( self, block=True, title='Piece [color]', view=True ):
     if view: show(self.input, block, title)
